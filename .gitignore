@@ -1,0 +1,8 @@
+erp.db
+backups/
+*.pyc
+__pycache__/
+*.pdf
+*.csv
+_tmp_*
+qr_*.png
