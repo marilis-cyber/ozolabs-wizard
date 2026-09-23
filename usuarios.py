@@ -115,9 +115,27 @@ def crear_admin_inicial():
     n = conn.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
     conn.close()
     if n == 0:
-        crear_usuario("admin", "Administrador", "admin", "admin",
-                      email="admin@ozolabs.local")
-        print("⚠ Usuario inicial creado: admin / admin (cámbialo en el primer login)")
+        ok = crear_usuario("admin", "Administrador", "admin", "admin",
+                           email="admin@ozolabs.local")
+        if ok:
+            print("⚠ Usuario inicial creado: admin / admin (cámbialo en el primer login)")
+        else:
+            print("✘ NO se pudo crear el usuario admin inicial. "
+                  "¿Está passlib/bcrypt bien instalado?")
+        return ok
+    return True
+
+
+def reset_admin():
+    """Borra y recrea el usuario admin/admin. Útil si el hash quedó corrupto."""
+    conn = conectar()
+    conn.execute("DELETE FROM usuarios WHERE usuario = 'admin'")
+    conn.commit()
+    conn.close()
+    ok = crear_usuario("admin", "Administrador", "admin", "admin",
+                       email="admin@ozolabs.local")
+    print("✔ admin/admin recreado." if ok else "✘ Error recreando admin.")
+    return ok
 
 
 # =========================================================
@@ -127,9 +145,13 @@ def crear_usuario(usuario, nombre, password, rol, email=""):
     if rol not in ROLES:
         print(f"✘ Rol inválido. Válidos: {list(ROLES.keys())}")
         return False
-    conn = conectar()
     try:
         h = hash_password(password)
+    except Exception as e:
+        print(f"✘ Error al hashear la contraseña (passlib/bcrypt): {e}")
+        return False
+    conn = conectar()
+    try:
         conn.execute("""
             INSERT INTO usuarios
             (usuario, nombre, email, password_hash, rol, activo, fecha_creacion)
