@@ -149,6 +149,36 @@ def pantalla_login():
             else:
                 st.error("Credenciales incorrectas")
 
+    # --- Diagnóstico y rescate ---
+    with st.expander("🔧 ¿No puedes entrar? Diagnóstico"):
+        from database import conectar as _conn
+        c = _conn()
+        n = c.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
+        filas = c.execute(
+            "SELECT usuario, rol, activo FROM usuarios ORDER BY usuario"
+        ).fetchall()
+        c.close()
+        st.write(f"Usuarios en la base de datos: **{n}**")
+        if filas:
+            st.dataframe(
+                pd.DataFrame(filas, columns=["Usuario", "Rol", "Activo"]),
+                use_container_width=True,
+            )
+        else:
+            st.warning(
+                "No hay ningún usuario. Pulsa el botón de abajo para crear "
+                "el usuario **admin / admin**."
+            )
+        if st.button("🔄 Crear / restaurar admin (admin/admin)"):
+            from usuarios import reset_admin
+            if reset_admin():
+                st.success("✔ admin/admin creado. Ya puedes entrar.")
+            else:
+                st.error(
+                    "✘ No se pudo crear. Falta o falla `passlib`/`bcrypt`. "
+                    "Revisa los logs del Space."
+                )
+
 
 if not st.session_state.usuario:
     pantalla_login()
