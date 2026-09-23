@@ -35,8 +35,14 @@ def _credenciales_turso():
     try:
         import streamlit as st
         if "turso" in st.secrets:
-            url = st.secrets["turso"].get("url")
-            token = st.secrets["turso"].get("auth_token")
+            sec = st.secrets["turso"]
+            url = sec.get("url")
+            # Token: puede venir entero (auth_token) o en trozos (t1+t2+t3)
+            token = sec.get("auth_token")
+            if not token:
+                token = (sec.get("t1", "") + sec.get("t2", "")
+                         + sec.get("t3", ""))
+                token = token or None
             if url and token:
                 return url, token
     except Exception:
