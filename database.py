@@ -83,7 +83,8 @@ def _tipo_arg(valor):
     if isinstance(valor, int):
         return {"type": "integer", "value": str(valor)}
     if isinstance(valor, float):
-        return {"type": "float", "value": repr(valor)}
+        # Turso espera el float como NÚMERO, no como string
+        return {"type": "float", "value": valor}
     return {"type": "text", "value": str(valor)}
 
 
