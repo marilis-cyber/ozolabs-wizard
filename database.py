@@ -590,6 +590,56 @@ def _tablas_sql():
             comentarios TEXT,
             responsable TEXT
         )""",
+        """CREATE TABLE IF NOT EXISTS ozono_producciones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero TEXT UNIQUE NOT NULL,
+            fecha TEXT,
+            hora_inicio TEXT,
+            hora_fin TEXT,
+            litros REAL DEFAULT 0,
+            reactor TEXT,
+            aceite_codigo TEXT,
+            aceite_nombre TEXT,
+            aceite_lote TEXT,
+            proveedor TEXT,
+            flujo REAL DEFAULT 0,
+            presion REAL DEFAULT 0,
+            nitrogeno TEXT,
+            trampa_agua TEXT,
+            emulsion TEXT,
+            observaciones TEXT,
+            responsable TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS garrafas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo TEXT UNIQUE NOT NULL,
+            litros_capacidad REAL DEFAULT 0,
+            litros_disponibles REAL DEFAULT 0,
+            produccion_numero TEXT,
+            lote TEXT,
+            producto TEXT,
+            fecha_llenado TEXT,
+            ubicacion TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS salidas_garrafa (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            garrafa_codigo TEXT NOT NULL,
+            fecha TEXT NOT NULL,
+            litros REAL DEFAULT 0,
+            destino TEXT,
+            comentarios TEXT,
+            responsable TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS etiquetas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            producto_codigo TEXT NOT NULL,
+            producto_nombre TEXT,
+            version INTEGER DEFAULT 1,
+            nombre_fichero TEXT,
+            contenido_base64 TEXT,
+            fecha TEXT,
+            comentarios TEXT
+        )""",
         """CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             usuario TEXT UNIQUE NOT NULL,
