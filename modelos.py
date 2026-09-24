@@ -104,13 +104,18 @@ descontar_stock_fefo = descontar_fefo
 # =========================================================
 # PRODUCTOS
 # =========================================================
-def añadir_producto(codigo, nombre, formato="", stock_minimo=0):
+def añadir_producto(codigo, nombre, formato="", stock_minimo=0,
+                    tamano_unidad=0, unidad_tamano="mL", uso="cosmetico",
+                    envase_codigo="", caducidad_meses=0):
     conn = conectar()
     try:
-        conn.execute(
-            "INSERT INTO productos (codigo, nombre, formato, stock_minimo) VALUES (?, ?, ?, ?)",
-            (codigo, nombre, formato, stock_minimo)
-        )
+        conn.execute("""
+            INSERT INTO productos
+            (codigo, nombre, formato, stock_minimo, tamano_unidad,
+             unidad_tamano, uso, envase_codigo, caducidad_meses)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (codigo, nombre, formato, stock_minimo, tamano_unidad,
+              unidad_tamano, uso, envase_codigo, caducidad_meses))
         conn.commit()
         print(f"✔ Producto '{nombre}' creado.")
         return True
@@ -121,30 +126,118 @@ def añadir_producto(codigo, nombre, formato="", stock_minimo=0):
         conn.close()
 
 
+def actualizar_producto(codigo, nombre, formato, stock_minimo,
+                        tamano_unidad, unidad_tamano, uso,
+                        envase_codigo="", caducidad_meses=0):
+    """Actualiza los datos de un producto existente."""
+    conn = conectar()
+    conn.execute("""
+        UPDATE productos
+        SET nombre = ?, formato = ?, stock_minimo = ?, tamano_unidad = ?,
+            unidad_tamano = ?, uso = ?, envase_codigo = ?,
+            caducidad_meses = ?
+        WHERE codigo = ?
+    """, (nombre, formato, stock_minimo, tamano_unidad, unidad_tamano,
+          uso, envase_codigo, caducidad_meses, codigo))
+    conn.commit()
+    conn.close()
+    print(f"✔ Producto '{codigo}' actualizado.")
+    return True
+
+
 def obtener_producto(codigo):
     conn = conectar()
     row = conn.execute(
-        "SELECT id, codigo, nombre, formato, stock_minimo FROM productos WHERE codigo = ?",
+        """SELECT id, codigo, nombre, formato, stock_minimo,
+                  COALESCE(tamano_unidad, 0), COALESCE(unidad_tamano, 'mL'),
+                  COALESCE(uso, 'cosmetico'), COALESCE(envase_codigo, ''),
+                  COALESCE(caducidad_meses, 0)
+           FROM productos WHERE codigo = ?""",
         (codigo,)
     ).fetchone()
     conn.close()
     return row
 
 
-def añadir_ingrediente_formula(producto_codigo, materia_codigo, cantidad, unidad):
+def producto_por_nombre(nombre):
+    """Busca un producto por su nombre (búsqueda exacta y luego parcial)."""
+    conn = conectar()
+    row = conn.execute(
+        """SELECT id, codigo, nombre, formato, stock_minimo,
+                  COALESCE(tamano_unidad, 0), COALESCE(unidad_tamano, 'mL'),
+                  COALESCE(uso, 'cosmetico')
+           FROM productos WHERE nombre = ? LIMIT 1""",
+        (nombre,)
+    ).fetchone()
+    if not row:
+        row = conn.execute(
+            """SELECT id, codigo, nombre, formato, stock_minimo,
+                      COALESCE(tamano_unidad, 0), COALESCE(unidad_tamano, 'mL'),
+                      COALESCE(uso, 'cosmetico')
+               FROM productos WHERE nombre LIKE ? LIMIT 1""",
+            (f"%{nombre}%",)
+        ).fetchone()
+    conn.close()
+    return row
+
+
+def añadir_ingrediente_formula(producto_codigo, materia_codigo, cantidad, unidad,
+                                porcentaje=0):
     prod = obtener_producto(producto_codigo)
     if not prod:
         print("✘ Producto no existe.")
         return False
     conn = conectar()
     conn.execute("""
-        INSERT INTO formulas (producto_id, materia_codigo, cantidad_por_unidad, unidad)
-        VALUES (?, ?, ?, ?)
-    """, (prod[0], materia_codigo, cantidad, unidad))
+        INSERT INTO formulas (producto_id, materia_codigo, cantidad_por_unidad,
+                              unidad, porcentaje)
+        VALUES (?, ?, ?, ?, ?)
+    """, (prod[0], materia_codigo, cantidad, unidad, porcentaje))
     conn.commit()
     conn.close()
     print(f"✔ Ingrediente añadido a la fórmula de {producto_codigo}.")
     return True
+
+
+def borrar_ingrediente_formula(producto_codigo, materia_codigo):
+    """Elimina un ingrediente de la fórmula de un producto."""
+    prod = obtener_producto(producto_codigo)
+    if not prod:
+        return False
+    conn = conectar()
+    conn.execute("""
+        DELETE FROM formulas
+        WHERE producto_id = ? AND materia_codigo = ?
+    """, (prod[0], materia_codigo))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def ver_formula_detallada(producto_codigo):
+    """Devuelve la fórmula con el NOMBRE y coste de cada materia prima.
+    Columnas: codigo, nombre_mp, cantidad, unidad, porcentaje, precio, subtotal"""
+    prod = obtener_producto(producto_codigo)
+    if not prod:
+        return []
+    conn = conectar()
+    rows = conn.execute("""
+        SELECT f.materia_codigo,
+               COALESCE(mp.nombre, f.materia_codigo) AS nombre,
+               f.cantidad_por_unidad,
+               f.unidad,
+               COALESCE(f.porcentaje, 0),
+               COALESCE(mp.coste_unitario, 0) AS precio
+        FROM formulas f
+        LEFT JOIN materias_primas mp ON mp.codigo = f.materia_codigo
+        WHERE f.producto_id = ?
+        ORDER BY f.id
+    """, (prod[0],)).fetchall()
+    conn.close()
+    resultado = []
+    for cod, nom, cant, uni, pct, precio in rows:
+        resultado.append((cod, nom, cant, uni, pct, precio, cant * precio))
+    return resultado
 
 
 def ver_formula(producto_codigo):
@@ -1206,6 +1299,8 @@ __all__ = [
     "lotes_disponibles", "descontar_fefo", "descontar_stock_fefo",
     # Productos
     "añadir_producto", "obtener_producto", "añadir_ingrediente_formula",
+    "actualizar_producto", "producto_por_nombre", "borrar_ingrediente_formula",
+    "ver_formula_detallada",
     "ver_formula", "stock_producto_terminado", "trazabilidad_lote",
     # Producción
     "producir", "calcular_coste_produccion", "imprimir_coste",
