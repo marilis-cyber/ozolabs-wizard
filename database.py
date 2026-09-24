@@ -187,33 +187,44 @@ class _CursorTurso:
 
 
 class _ConexionTurso:
-    """Conexión compatible con sqlite3, por HTTP contra Turso."""
 
     def __init__(self, url, token):
         # Normaliza la URL a https:// para el protocolo HTTP
         self._url = url.replace("libsql://", "https://").rstrip("/")
         self._token = token
-        # Estado de transacción (Turso HTTP hace autocommit; los commit
-        # son no-ops pero se aceptan para mantener compatibilidad)
-        self._en_transaccion = False
 
     def _peticion(self, payload):
         datos = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"{self._url}/v2/pipeline",
-            data=datos,
-            headers={
-                "Authorization": f"Bearer {self._token}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                return json.loads(r.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            cuerpo = e.read().decode("utf-8", errors="replace")
-            raise Exception(f"Turso HTTP {e.code}: {cuerpo[:300]}")
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+        # Reintentar hasta 3 veces ante fallos transitorios (429, 5xx, red)
+        import time as _time
+        ultimo_error = None
+        for intento in range(3):
+            req = urllib.request.Request(
+                f"{self._url}/v2/pipeline",
+                data=datos, headers=headers, method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return json.loads(r.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                cuerpo = e.read().decode("utf-8", errors="replace")
+                ultimo_error = f"Turso HTTP {e.code}: {cuerpo[:300]}"
+                # Error de servidor / rate limit → esperar y reintentar
+                if e.code in (429, 500, 502, 503, 504) and intento < 2:
+                    _time.sleep(1.5 * (intento + 1))
+                    continue
+                raise Exception(ultimo_error)
+            except urllib.error.URLError as e:
+                ultimo_error = f"Turso conexion: {e}"
+                if intento < 2:
+                    _time.sleep(1.5 * (intento + 1))
+                    continue
+                raise Exception(ultimo_error)
+        raise Exception(ultimo_error or "Turso: error desconocido")
 
     def execute(self, sql, params=()):
         # PRAGMA foreign_keys no aplica en Turso; se ignora sin error
@@ -768,3 +779,7 @@ def backup_db():
     nombre = f"ozolabs_wizard_backup_{_dt.now().strftime('%Y%m%d_%H%M%S')}.db"
     copyfile(DB_PATH, _os.path.join(carpeta, nombre))
     print(f"✔ Backup OZOLABS' WIZARD creado: {nombre}")
+
+
+# Alias público para comprobar el tipo de conexión desde otros módulos
+ConexionTurso = _ConexionTurso
