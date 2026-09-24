@@ -407,53 +407,85 @@ elif seccion == "📦 Productos y fórmulas":
 
     # ---------- TAB 1: crear / editar producto ----------
     with tab1:
-        st.markdown("### Datos del producto")
+        # Selector: nuevo o editar existente
+        opciones_sel = ["🆕 Crear producto NUEVO"] + opciones_prod
+        sel_modo = st.selectbox("¿Qué quieres hacer?", opciones_sel,
+                                 key="modo_prod")
+
+        # Valores por defecto
+        v_cod = ""
+        v_nom = ""
+        v_tamano = 50.0
+        v_uni = "mL"
+        v_uso = "cosmetico"
+        v_formato = ""
+        v_env = ""
+        v_cad = 0
+        v_smin = 0.0
+        editando = False
+
+        if sel_modo != "🆕 Crear producto NUEVO":
+            cod_sel = sel_modo.split(" · ")[0]
+            p = obtener_producto(cod_sel)
+            if p:
+                editando = True
+                v_cod = p[1] or ""
+                v_nom = p[2] or ""
+                v_formato = p[3] or ""
+                v_smin = float(p[4] or 0)
+                v_tamano = float(p[5] or 0)
+                v_uni = p[6] or "mL"
+                v_uso = p[7] or "cosmetico"
+                v_env = p[8] or ""
+                v_cad = int(p[9] or 0)
+
+        if editando:
+            st.info(f"✏️ Editando el producto **{v_nom}** (`{v_cod}`)")
+        else:
+            st.info("🆕 Creando un producto nuevo")
+
+        # Índices para los selectbox (evitar error si el valor no está)
+        idx_uni = ["mL", "g"].index(v_uni) if v_uni in ["mL", "g"] else 0
+        usos = ["cosmetico", "alimentario", "ambos"]
+        idx_uso = usos.index(v_uso) if v_uso in usos else 0
+
         with st.form("form_prod"):
             c1, c2 = st.columns(2)
-            cod = c1.text_input("Código *")
-            nom = c2.text_input("Nombre *")
+            cod = c1.text_input("Código *", value=v_cod,
+                                 disabled=editando)
+            nom = c2.text_input("Nombre *", value=v_nom)
             c3, c4 = st.columns(2)
             tamano = c3.number_input("Tamaño por unidad *", min_value=0.0,
-                                      step=1.0, value=50.0)
-            uni_tam = c4.selectbox("Unidad del tamaño", ["mL", "g"])
+                                      step=1.0, value=v_tamano)
+            uni_tam = c4.selectbox("Unidad del tamaño", ["mL", "g"],
+                                    index=idx_uni)
             c5, c6 = st.columns(2)
-            uso = c5.selectbox("Uso", ["cosmetico", "alimentario", "ambos"])
-            formato = c6.text_input("Formato/presentación")
+            uso = c5.selectbox("Uso", usos, index=idx_uso)
+            formato = c6.text_input("Formato/presentación", value=v_formato)
             c7, c8 = st.columns(2)
-            env_cod = c7.text_input("Código envase (opcional)")
+            env_cod = c7.text_input("Código envase (opcional)", value=v_env)
             cad_meses = c8.number_input("Caducidad (meses)", min_value=0,
-                                         step=1, value=0)
-            smin = st.number_input("Stock mínimo (uds)", min_value=0.0)
+                                         step=1, value=v_cad)
+            smin = st.number_input("Stock mínimo (uds)", min_value=0.0,
+                                    value=v_smin)
 
-            if st.form_submit_button("💾 Guardar producto"):
+            etiqueta_boton = ("💾 Guardar cambios" if editando
+                              else "💾 Crear producto")
+            if st.form_submit_button(etiqueta_boton):
                 if not cod or not nom:
                     st.error("Código y nombre son obligatorios.")
                 else:
                     existente = obtener_producto(cod)
                     if existente:
                         actualizar_producto(cod, nom, formato, smin, tamano,
-                                            uni_tam, uso, env_cod, int(cad_meses))
+                                            uni_tam, uso, env_cod,
+                                            int(cad_meses))
                         st.success(f"✔ Producto '{nom}' actualizado.")
                     else:
                         añadir_producto(cod, nom, formato, smin, tamano,
                                         uni_tam, uso, env_cod, int(cad_meses))
                         st.success(f"✔ Producto '{nom}' creado.")
                     st.rerun()
-
-        if prods:
-            st.markdown("---")
-            st.markdown("### Editar un producto existente")
-            sel_ed = st.selectbox("Producto a editar", opciones_prod,
-                                   key="sel_editar")
-            cod_ed = sel_ed.split(" · ")[0]
-            p = obtener_producto(cod_ed)
-            if p:
-                st.info(
-                    f"**{p[2]}** · Tamaño: {p[5]} {p[6]} · Uso: {p[7]} "
-                    f"· Stock mín: {p[4]}"
-                )
-                st.caption("Para modificarlo, escribe su código arriba y "
-                           "vuelve a guardar.")
 
     # ---------- TAB 2: editar fórmula (% + cantidad) ----------
     with tab2:
@@ -518,7 +550,6 @@ elif seccion == "📦 Productos y fórmulas":
                     if not mp_cod:
                         st.error("Indica el código de la materia prima.")
                     else:
-                        mp = obtener_producto(mp_cod)  # comprobar
                         conn2 = conectar()
                         existe = conn2.execute(
                             "SELECT nombre FROM materias_primas WHERE codigo = ? LIMIT 1",
