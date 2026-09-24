@@ -211,7 +211,7 @@ st.sidebar.markdown("---")
 TODOS_LOS_MODULOS = [
     "🏠 Dashboard", "🌿 Materias primas", "📦 Productos y fórmulas",
     "⚙️ Producción", "📋 Pedidos de producción", "🧴 Envases y etiquetas",
-    "🚚 Proveedores", "💰 Costes", "📊 Avisos", "📈 Histórico y exportación",
+    "🚚 Proveedores", "💰 Costes", "📊 Avisos", "📤 Salidas",
     "🔬 Escandallos reales", "📐 Planificación MRP", "✅ Control de calidad",
     "🏷️ Etiquetado", "📄 Informes PDF", "🖨️ Etiqueta térmica",
     "📖 Manual de uso", "📊 Análisis y gráficos", "📧 Envío de informes",
@@ -361,52 +361,206 @@ elif seccion == "🌿 Materias primas":
 # 📦 PRODUCTOS Y FÓRMULAS
 # =========================================================
 elif seccion == "📦 Productos y fórmulas":
+    from modelos import (ver_formula_detallada, actualizar_producto,
+                         borrar_ingrediente_formula, producto_por_nombre)
     st.title("📦 Productos y fórmulas")
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["➕ Crear producto", "🧪 Añadir ingrediente", "📜 Ver fórmula", "📦 Stock PT", "🔎 Trazabilidad"]
-    )
 
+    conn = conectar()
+    prods = conn.execute(
+        "SELECT codigo, nombre FROM productos ORDER BY nombre"
+    ).fetchall()
+    conn.close()
+    opciones_prod = [f"{c} · {n}" for c, n in prods]
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "➕ Nuevo producto", "🧪 Editar fórmula", "📜 Ver fórmulas",
+        "📦 Stock producto terminado",
+    ])
+
+    # ---------- TAB 1: crear / editar producto ----------
     with tab1:
+        st.markdown("### Datos del producto")
         with st.form("form_prod"):
-            cod = st.text_input("Código *")
-            nom = st.text_input("Nombre *")
-            formato = st.text_input("Formato/presentación")
-            smin = st.number_input("Stock mínimo", min_value=0.0)
-            if st.form_submit_button("Crear"):
-                if cod and nom:
-                    añadir_producto(cod, nom, formato, smin)
-                    st.success("✔ Producto creado.")
+            c1, c2 = st.columns(2)
+            cod = c1.text_input("Código *")
+            nom = c2.text_input("Nombre *")
+            c3, c4 = st.columns(2)
+            tamano = c3.number_input("Tamaño por unidad *", min_value=0.0,
+                                      step=1.0, value=50.0)
+            uni_tam = c4.selectbox("Unidad del tamaño", ["mL", "g"])
+            c5, c6 = st.columns(2)
+            uso = c5.selectbox("Uso", ["cosmetico", "alimentario", "ambos"])
+            formato = c6.text_input("Formato/presentación")
+            c7, c8 = st.columns(2)
+            env_cod = c7.text_input("Código envase (opcional)")
+            cad_meses = c8.number_input("Caducidad (meses)", min_value=0,
+                                         step=1, value=0)
+            smin = st.number_input("Stock mínimo (uds)", min_value=0.0)
+
+            if st.form_submit_button("💾 Guardar producto"):
+                if not cod or not nom:
+                    st.error("Código y nombre son obligatorios.")
+                else:
+                    existente = obtener_producto(cod)
+                    if existente:
+                        actualizar_producto(cod, nom, formato, smin, tamano,
+                                            uni_tam, uso, env_cod, int(cad_meses))
+                        st.success(f"✔ Producto '{nom}' actualizado.")
+                    else:
+                        añadir_producto(cod, nom, formato, smin, tamano,
+                                        uni_tam, uso, env_cod, int(cad_meses))
+                        st.success(f"✔ Producto '{nom}' creado.")
                     st.rerun()
 
+        if prods:
+            st.markdown("---")
+            st.markdown("### Editar un producto existente")
+            sel_ed = st.selectbox("Producto a editar", opciones_prod,
+                                   key="sel_editar")
+            cod_ed = sel_ed.split(" · ")[0]
+            p = obtener_producto(cod_ed)
+            if p:
+                st.info(
+                    f"**{p[2]}** · Tamaño: {p[5]} {p[6]} · Uso: {p[7]} "
+                    f"· Stock mín: {p[4]}"
+                )
+                st.caption("Para modificarlo, escribe su código arriba y "
+                           "vuelve a guardar.")
+
+    # ---------- TAB 2: editar fórmula (% + cantidad) ----------
     with tab2:
-        with st.form("form_ing"):
-            pc = st.text_input("Código producto")
-            mc = st.text_input("Código materia prima")
-            cant = st.number_input("Cantidad por unidad", min_value=0.0, step=0.001, format="%.4f")
-            uni = st.selectbox("Unidad", ["kg", "g", "L", "mL", "ud"])
-            if st.form_submit_button("Añadir"):
-                añadir_ingrediente_formula(pc, mc, cant, uni)
-                st.success("✔ Ingrediente añadido.")
-                st.rerun()
+        if not prods:
+            st.info("Crea primero un producto.")
+        else:
+            sel = st.selectbox("Producto", opciones_prod, key="sel_formula")
+            prod_cod = sel.split(" · ")[0]
+            prod_nom = sel.split(" · ")[1]
+            p = obtener_producto(prod_cod)
+            tamano = p[5] if p else 0
+            uni_tam = p[6] if p else "mL"
 
+            st.markdown(
+                f"**{prod_nom}** · Tamaño por unidad: **{tamano} {uni_tam}**"
+            )
+            st.caption("Introduce cada ingrediente en **%**. Se calcula "
+                       "automáticamente la cantidad por unidad.")
+
+            # Fórmula actual
+            formula = ver_formula_detallada(prod_cod)
+            if formula:
+                filas_f = []
+                total_pct = 0
+                total_coste = 0
+                for cod_mp, nom_mp, cant, uni, pct, precio, sub in formula:
+                    filas_f.append([nom_mp, f"{pct:.1f} %", f"{cant:.3f}",
+                                    uni, f"{precio:.3f} €", f"{sub:.3f} €"])
+                    total_pct += pct
+                    total_coste += sub
+                df_f = pd.DataFrame(filas_f, columns=["Ingrediente", "%",
+                                                       "Cantidad/ud", "Unidad",
+                                                       "€/unidad", "Coste/ud"])
+                st.dataframe(df_f, use_container_width=True)
+                cc1, cc2 = st.columns(2)
+                cc1.metric("Suma de %", f"{total_pct:.1f} %",
+                           delta="OK" if abs(total_pct - 100) < 0.5 else "Revisar")
+                cc2.metric("Coste MP/unidad", f"{total_coste:.4f} €")
+            else:
+                st.info("Sin fórmula definida todavía.")
+
+            st.markdown("---")
+            st.markdown("### Añadir ingrediente")
+            with st.form("form_ing_porc"):
+                c1, c2 = st.columns(2)
+                mp_cod = c1.text_input("Código de materia prima *")
+                pct = c2.number_input("% del ingrediente", min_value=0.0,
+                                       max_value=100.0, step=0.1, value=0.0)
+                modo = st.radio(
+                    "¿Cómo quieres introducirlo?",
+                    ["Solo %  (calcula cantidad)", "Solo cantidad  (calcula %)"],
+                    horizontal=True,
+                )
+                if modo.startswith("Solo cantidad"):
+                    cant_manual = st.number_input(
+                        f"Cantidad por unidad ({uni_tam})", min_value=0.0,
+                        step=0.001, format="%.4f")
+                else:
+                    cant_manual = 0.0
+
+                if st.form_submit_button("➕ Añadir a la fórmula"):
+                    if not mp_cod:
+                        st.error("Indica el código de la materia prima.")
+                    else:
+                        mp = obtener_producto(mp_cod)  # comprobar
+                        conn2 = conectar()
+                        existe = conn2.execute(
+                            "SELECT nombre FROM materias_primas WHERE codigo = ? LIMIT 1",
+                            (mp_cod,)).fetchone()
+                        conn2.close()
+                        if not existe:
+                            st.error(f"No existe la materia prima '{mp_cod}'.")
+                        else:
+                            if modo.startswith("Solo cantidad") and tamano > 0:
+                                cant = cant_manual
+                                pct_calc = (cant / tamano * 100) if tamano else 0
+                            else:
+                                cant = tamano * pct / 100.0
+                                pct_calc = pct
+                            añadir_ingrediente_formula(prod_cod, mp_cod, cant,
+                                                       uni_tam, pct_calc)
+                            st.success("✔ Ingrediente añadido.")
+                            st.rerun()
+
+            # Borrar ingrediente
+            if formula:
+                st.markdown("### Eliminar ingrediente")
+                nombres = [f[1] for f in formula]
+                del_sel = st.selectbox("Ingrediente a eliminar", nombres,
+                                        key="del_ing")
+                if st.button("🗑 Eliminar de la fórmula"):
+                    for f in formula:
+                        if f[1] == del_sel:
+                            borrar_ingrediente_formula(prod_cod, f[0])
+                            st.success("✔ Eliminado.")
+                            st.rerun()
+
+    # ---------- TAB 3: ver fórmulas ----------
     with tab3:
-        pc = st.text_input("Código producto", key="vf")
-        if pc:
-            filas = ver_formula(pc)
-            df_f = df(filas, ["Materia", "Cantidad/ud", "Unidad"])
-            st.dataframe(df_f, use_container_width=True)
+        if not prods:
+            st.info("No hay productos.")
+        else:
+            sel_v = st.selectbox("Elige un producto por su nombre",
+                                 opciones_prod, key="sel_ver")
+            prod_cod = sel_v.split(" · ")[0]
+            prod_nom = sel_v.split(" · ")[1]
+            formula = ver_formula_detallada(prod_cod)
+            if formula:
+                st.markdown(f"### Fórmula de **{prod_nom}**")
+                filas_f = []
+                for cod_mp, nom_mp, cant, uni, pct, precio, sub in formula:
+                    filas_f.append([nom_mp, f"{pct:.1f} %", f"{cant:.3f}",
+                                    uni, f"{precio:.3f} €", f"{sub:.3f} €"])
+                df_f = pd.DataFrame(filas_f, columns=["Ingrediente", "%",
+                                                       "Cantidad/ud", "Unidad",
+                                                       "€/unidad", "Coste/ud"])
+                st.dataframe(df_f, use_container_width=True)
+            else:
+                st.info("Este producto no tiene fórmula todavía.")
 
+    # ---------- TAB 4: stock producto terminado ----------
     with tab4:
+        st.markdown("### Stock de producto terminado (PT)")
+        st.caption("Aquí se ven los lotes de producto ya fabricados.")
         filas = stock_producto_terminado()
-        df_pt = df(filas, ["Código", "Producto", "Lote", "Cantidad", "Caducidad", "Fabricación"])
+        df_pt = df(filas, ["Código", "Producto", "Lote", "Cantidad",
+                            "Caducidad", "Fabricación"])
         st.dataframe(df_pt, use_container_width=True)
         descargar_df(df_pt, "stock_producto_terminado.csv")
 
-    with tab5:
-        lote = st.text_input("Lote PT")
+        st.markdown("### 🔎 Trazabilidad de un lote")
+        lote = st.text_input("Lote PT", key="traz_pt")
         if lote:
-            filas = trazabilidad_lote(lote)
-            df_t = df(filas, ["MP", "Lote MP", "Cantidad usada", "Fecha"])
+            filas_t = trazabilidad_lote(lote)
+            df_t = df(filas_t, ["MP", "Lote MP", "Cantidad usada", "Fecha"])
             st.dataframe(df_t, use_container_width=True)
 
 
@@ -1352,81 +1506,118 @@ elif seccion == "🛒 Órdenes de compra":
 
 
 # =========================================================
-# 📥 RECEPCIÓN
+# 📥 RECEPCIÓN (versión ampliada)
 # =========================================================
 elif seccion == "📥 Recepción de mercancía":
+    from recepcion import (crear_recepcion_directa,
+                           listar_recepciones_directas)
     st.title("📥 Recepción de mercancía")
-    tab1, tab2, tab3 = st.tabs(["➕ Nueva", "📋 Listar", "✔️ QC y entrada"])
+    tab1, tab2 = st.tabs(["➕ Nueva entrada", "📋 Listado"])
+
+    with tab1:
+        with st.form("form_recepcion_directa"):
+            c1, c2 = st.columns(2)
+            fecha_entrada = c1.date_input("Fecha de entrada",
+                                          value=date.today())
+            producto = c2.text_input("Producto *")
+            lote = c1.text_input("Lote *")
+            proveedor = c2.text_input("Proveedor")
+            uso = c1.selectbox("Uso", ["cosmetico", "alimentario", "ambos"])
+            conforme = c2.selectbox("Conformidad",
+                                    ["conforme", "no_conforme"])
+            bio = c1.checkbox("Bio")
+            caducidad_bio = c2.date_input("Caducidad certificado bio",
+                                           value=None)
+            responsable = c1.text_input("Responsable")
+            observaciones = st.text_area("Observaciones")
+
+            if st.form_submit_button("Guardar entrada"):
+                if not producto or not lote:
+                    st.error("Producto y lote son obligatorios.")
+                else:
+                    num = crear_recepcion_directa(
+                        producto, lote, proveedor,
+                        str(fecha_entrada), uso, conforme, bio,
+                        str(caducidad_bio) if caducidad_bio else None,
+                        responsable, observaciones,
+                    )
+                    st.success(f"✔ Entrada {num} registrada.")
+                    st.rerun()
+
+    with tab2:
+        filas = listar_recepciones_directas()
+        df_r = df(filas, ["Número", "Fecha", "Producto", "Proveedor",
+                          "Uso", "Conformidad", "Bio", "Caduc. bio",
+                          "Responsable", "Observaciones"])
+        st.dataframe(df_r, use_container_width=True)
+        descargar_df(df_r, "recepciones.csv")
+
+
+# =========================================================
+# 📤 SALIDAS
+# =========================================================
+elif seccion == "📤 Salidas":
+    from recepcion import crear_salida, listar_salidas
+    st.title("📤 Salidas de producto")
+    tab1, tab2 = st.tabs(["➕ Nueva salida", "📋 Listado"])
 
     with tab1:
         conn = conectar()
-        ocs = conn.execute("""SELECT numero FROM ordenes_compra
-                              WHERE estado IN ('enviada','confirmada','recibida_parcial')
-                              ORDER BY fecha_creacion DESC""").fetchall()
+        productos = conn.execute(
+            "SELECT codigo, nombre FROM productos ORDER BY nombre"
+        ).fetchall()
         conn.close()
-        if not ocs:
-            st.info("Sin OCs pendientes.")
-        else:
-            oc = st.selectbox("OC", [o[0] for o in ocs])
-            albaran = st.text_input("Nº albarán")
-            if st.button("Crear recepción"):
-                numero = crear_recepcion(oc, albaran, user["usuario"], "")
-                st.session_state["recepcion_actual"] = numero
-                st.success(f"✔ Recepción {numero} creada.")
-                st.rerun()
 
-            if "recepcion_actual" in st.session_state:
-                rec_num = st.session_state["recepcion_actual"]
-                st.markdown(f"### Líneas de {rec_num}")
-                with st.form("form_linea_rec"):
-                    c1, c2, c3 = st.columns(3)
-                    tipo = c1.selectbox("Tipo", ["MP", "ENV"])
-                    cod = c2.text_input("Código")
-                    lote_prov = c3.text_input("Lote proveedor")
-                    c4, c5, c6 = st.columns(3)
-                    cant = c4.number_input("Cantidad", min_value=0.0)
-                    uni = c5.selectbox("Unidad", ["kg", "g", "L", "mL", "ud"])
-                    coste = c6.number_input("€/ud", min_value=0.0, step=0.01)
-                    c7, c8, c9 = st.columns(3)
-                    fcad = c7.date_input("Caducidad", value=None)
-                    eco = c8.text_input("Certificado eco")
-                    feco = c9.date_input("Caduc. eco", value=None)
-                    ubi = st.text_input("Ubicación")
-                    if st.form_submit_button("➕ Añadir línea"):
-                        lote_int = añadir_linea_recepcion(rec_num, tipo, cod, lote_prov,
-                                                            cant, uni,
-                                                            str(fcad) if fcad else None,
-                                                            eco or None,
-                                                            str(feco) if feco else None,
-                                                            coste, ubi)
-                        st.success(f"✔ Línea añadida ({lote_int})")
-                        st.rerun()
+        if productos:
+            opciones = [f"{c} · {n}" for c, n in productos]
+            sel = st.selectbox("Producto", opciones)
+            prod_cod = sel.split(" · ")[0]
+            prod_nom = sel.split(" · ")[1]
+        else:
+            st.info("No hay productos. Añádelos en Productos y fórmulas.")
+            prod_cod = ""
+            prod_nom = st.text_input("Producto")
+
+        with st.form("form_salida"):
+            c1, c2 = st.columns(2)
+            uso = c1.selectbox("Uso", ["cosmetico", "alimentario", "ambos"])
+            destino = c2.text_input("Destino *")
+            lote = c1.text_input("Lote *")
+            cantidad = c2.number_input("Cantidad", min_value=0.0, step=0.1)
+            unidad = c1.selectbox("Unidad", ["ud", "kg", "g", "L", "mL"])
+            responsable = c2.text_input("Responsable")
+            comentarios = st.text_area(
+                "Comentarios",
+                placeholder="Ej: envío de aceite a Natural Solter "
+                            "para producción de crema J",
+            )
+            if st.form_submit_button("Registrar salida"):
+                if not prod_nom or not destino or not lote:
+                    st.error("Producto, destino y lote son obligatorios.")
+                else:
+                    crear_salida(prod_nom, prod_cod, uso, destino, lote,
+                                 cantidad, unidad, comentarios, responsable)
+                    st.success("✔ Salida registrada.")
+                    st.rerun()
 
     with tab2:
-        est = st.selectbox("Estado", ["(todas)", "pendiente_qc", "conforme", "con_incidencia"])
-        filas = listar_recepciones(None if est == "(todas)" else est)
-        df_r = df(filas, ["Número", "OC", "Proveedor", "Fecha", "Albarán", "Estado"])
-        st.dataframe(df_r, use_container_width=True)
+        filas = listar_salidas()
+        df_s = df(filas, ["Fecha", "Producto", "Código", "Uso", "Destino",
+                          "Lote", "Cantidad", "Unidad", "Comentarios",
+                          "Responsable"])
+        st.dataframe(df_s, use_container_width=True)
+        descargar_df(df_s, "salidas.csv")
 
-    with tab3:
-        rec = st.text_input("Número de recepción")
-        if rec:
-            lineas = lineas_recepcion(rec)
-            for (lid, tipo, cod, lprov, lint, cant, uni, fcad, coste, ubi, qc) in lineas:
-                col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
-                col1.markdown(f"**{cod}** · `{lint}`")
-                col2.markdown(f"{cant} {uni}")
-                col3.markdown(f"QC: **{qc}**")
-                nuevo_qc = col4.selectbox("Cambiar", ["pendiente", "apto", "no_apto"],
-                                            index=["pendiente", "apto", "no_apto"].index(qc),
-                                            key=f"qc_{lid}")
-                if nuevo_qc != qc:
-                    marcar_linea_qc(lid, nuevo_qc)
-                    st.rerun()
-            if st.button("✅ Confirmar y entrar stock"):
-                confirmar_recepcion_y_entrar_stock(rec, user["usuario"])
-                st.success("✔ Stock actualizado.")
-                st.rerun()
+        # Gasto por lote
+        st.markdown("### 🔎 Consumo por lote")
+        if not df_s.empty:
+            lotes = sorted(set(df_s["Lote"].dropna()))
+            lote_sel = st.selectbox("Ver movimientos del lote", ["(todos)"] + lotes)
+            if lote_sel != "(todos)":
+                df_lote = df_s[df_s["Lote"] == lote_sel]
+                st.dataframe(df_lote, use_container_width=True)
+                total = df_lote["Cantidad"].sum()
+                st.metric("Total salido de este lote", f"{total:.2f}")
 
 
 # =========================================================
