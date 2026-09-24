@@ -40,12 +40,40 @@ def listar_materias():
     conn = conectar()
     rows = conn.execute("""
         SELECT codigo, nombre, lote, cantidad, unidad,
-               fecha_caducidad, ubicacion
+               fecha_caducidad, ubicacion, proveedor,
+               COALESCE(coste_unitario, 0),
+               COALESCE(uso, 'cosmetico')
         FROM materias_primas
         ORDER BY nombre, fecha_caducidad
     """).fetchall()
     conn.close()
     return rows
+
+
+def stock_unificado():
+    """Devuelve TODO el stock (materias primas + envases) en una sola tabla.
+    Columnas: tipo, codigo, nombre, lote, cantidad, unidad, proveedor,
+              coste_unitario, caducidad, ubicacion
+    """
+    conn = conectar()
+    mp = conn.execute("""
+        SELECT 'MP' AS tipo, codigo, nombre, lote, cantidad, unidad,
+               COALESCE(proveedor, '') AS proveedor,
+               COALESCE(coste_unitario, 0) AS coste,
+               COALESCE(fecha_caducidad, '') AS caducidad,
+               COALESCE(ubicacion, '') AS ubicacion
+        FROM materias_primas
+    """).fetchall()
+    env = conn.execute("""
+        SELECT 'ENV' AS tipo, codigo, nombre, lote, cantidad, unidad,
+               COALESCE(proveedor, '') AS proveedor,
+               COALESCE(coste_unitario, 0) AS coste,
+               '' AS caducidad,
+               COALESCE(ubicacion, '') AS ubicacion
+        FROM envases
+    """).fetchall()
+    conn.close()
+    return list(mp) + list(env)
 
 
 def stock_por_codigo(codigo):
