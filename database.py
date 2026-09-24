@@ -261,14 +261,20 @@ def _tablas_sql():
             codigo TEXT UNIQUE NOT NULL,
             nombre TEXT NOT NULL,
             formato TEXT,
-            stock_minimo REAL DEFAULT 0
+            stock_minimo REAL DEFAULT 0,
+            tamano_unidad REAL DEFAULT 0,
+            unidad_tamano TEXT DEFAULT 'mL',
+            uso TEXT DEFAULT 'cosmetico',
+            envase_codigo TEXT,
+            caducidad_meses INTEGER DEFAULT 0
         )""",
         """CREATE TABLE IF NOT EXISTS formulas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             producto_id INTEGER NOT NULL,
             materia_codigo TEXT NOT NULL,
             cantidad_por_unidad REAL NOT NULL,
-            unidad TEXT NOT NULL
+            unidad TEXT NOT NULL,
+            porcentaje REAL DEFAULT 0
         )""",
         """CREATE TABLE IF NOT EXISTS stock_producto (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -518,7 +524,13 @@ def _tablas_sql():
             albaran_proveedor TEXT,
             usuario_receptor TEXT,
             observaciones TEXT,
-            estado TEXT DEFAULT 'pendiente_qc'
+            estado TEXT DEFAULT 'pendiente_qc',
+            uso TEXT DEFAULT 'cosmetico',
+            conforme TEXT DEFAULT 'conforme',
+            bio INTEGER DEFAULT 0,
+            caducidad_bio TEXT,
+            responsable TEXT,
+            producto TEXT
         )""",
         """CREATE TABLE IF NOT EXISTS lineas_recepcion (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -565,6 +577,19 @@ def _tablas_sql():
             coste_extra REAL DEFAULT 0,
             resultado TEXT
         )""",
+        """CREATE TABLE IF NOT EXISTS salidas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT NOT NULL,
+            producto TEXT,
+            producto_codigo TEXT,
+            uso TEXT DEFAULT 'cosmetico',
+            destino TEXT,
+            lote TEXT,
+            cantidad REAL DEFAULT 0,
+            unidad TEXT,
+            comentarios TEXT,
+            responsable TEXT
+        )""",
         """CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             usuario TEXT UNIQUE NOT NULL,
@@ -593,9 +618,37 @@ def crear_tablas():
             conn.execute(sql)
         except Exception as e:
             print(f"⚠ Error creando tabla: {e}")
+    _migrar_columnas(conn)
     conn.commit()
     conn.close()
     print("✔ OZOLABS' WIZARD · Base de datos lista.")
+
+
+def _migrar_columnas(conn):
+    """Añade columnas nuevas a tablas existentes (migración sin perder datos)."""
+    migraciones = [
+        ("recepciones", "uso", "TEXT DEFAULT 'cosmetico'"),
+        ("recepciones", "conforme", "TEXT DEFAULT 'conforme'"),
+        ("recepciones", "bio", "INTEGER DEFAULT 0"),
+        ("recepciones", "caducidad_bio", "TEXT"),
+        ("recepciones", "responsable", "TEXT"),
+        ("recepciones", "producto", "TEXT"),
+        ("materias_primas", "uso", "TEXT DEFAULT 'cosmetico'"),
+        ("materias_primas", "bio", "INTEGER DEFAULT 0"),
+        ("materias_primas", "caducidad_bio", "TEXT"),
+        ("materias_primas", "proveedor_lote", "TEXT"),
+        ("productos", "tamano_unidad", "REAL DEFAULT 0"),
+        ("productos", "unidad_tamano", "TEXT DEFAULT 'mL'"),
+        ("productos", "uso", "TEXT DEFAULT 'cosmetico'"),
+        ("productos", "envase_codigo", "TEXT"),
+        ("productos", "caducidad_meses", "INTEGER DEFAULT 0"),
+        ("formulas", "porcentaje", "REAL DEFAULT 0"),
+    ]
+    for tabla, columna, tipo in migraciones:
+        try:
+            conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
+        except Exception:
+            pass  # La columna ya existe
 
 
 def backup_db():
