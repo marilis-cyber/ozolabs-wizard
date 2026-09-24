@@ -24,6 +24,16 @@ DB_PATH = "erp.db"
 # =========================================================
 # DETECCIÓN DE TURSO
 # =========================================================
+def _limpiar(valor):
+    """Quita espacios, saltos de línea y comillas que se cuelan al pegar."""
+    if not valor:
+        return valor
+    v = str(valor).strip()
+    v = v.replace("\n", "").replace("\r", "").replace(" ", "")
+    v = v.strip('"').strip("'")
+    return v
+
+
 def _credenciales_turso():
     """
     Devuelve (url, token) si hay credenciales de Turso, o (None, None).
@@ -72,7 +82,7 @@ def _credenciales_turso():
             if t1:
                 token = t1 + t2 + t3
         if url and token:
-            return url, token
+            return _limpiar(url), _limpiar(token)
     except Exception:
         pass
 
@@ -80,7 +90,7 @@ def _credenciales_turso():
     url = os.environ.get("TURSO_URL")
     token = os.environ.get("TURSO_TOKEN")
     if url and token:
-        return url, token
+        return _limpiar(url), _limpiar(token)
 
     return None, None
 
