@@ -221,6 +221,24 @@ class _ConexionTurso:
             return _CursorTurso(self)
         return _CursorTurso(self).execute(sql, params)
 
+    def execute_lote(self, sentencias):
+        """Ejecuta varias sentencias SQL en UNA sola petición HTTP.
+        Mucho más rápido y fiable que una petición por sentencia."""
+        peticiones = [
+            {"type": "execute", "stmt": {"sql": sql, "args": []}}
+            for sql in sentencias
+        ]
+        peticiones.append({"type": "close"})
+        respuesta = self._peticion({"requests": peticiones})
+        errores = [
+            r.get("error", {}).get("message", "?")
+            for r in respuesta.get("results", [])
+            if r.get("type") == "error"
+        ]
+        if errores:
+            raise Exception("; ".join(errores[:3]))
+        return True
+
     def cursor(self):
         return _CursorTurso(self)
 
@@ -683,11 +701,25 @@ def _tablas_sql():
 
 def crear_tablas():
     conn = conectar()
-    for sql in _tablas_sql():
+    sentencias = _tablas_sql()
+    # En Turso, lanzamos todas las sentencias en UNA sola petición
+    # (mucho más rápido y fiable que 36 peticiones HTTP seguidas).
+    if isinstance(conn, _ConexionTurso):
         try:
-            conn.execute(sql)
+            conn.execute_lote(sentencias)
         except Exception as e:
-            print(f"⚠ Error creando tabla: {e}")
+            print(f"⚠ Error creando tablas en lote, probando una a una: {e}")
+            for sql in sentencias:
+                try:
+                    conn.execute(sql)
+                except Exception as e2:
+                    print(f"⚠ Error creando tabla: {e2}")
+    else:
+        for sql in sentencias:
+            try:
+                conn.execute(sql)
+            except Exception as e:
+                print(f"⚠ Error creando tabla: {e}")
     _migrar_columnas(conn)
     conn.commit()
     conn.close()
