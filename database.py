@@ -27,33 +27,52 @@ DB_PATH = "erp.db"
 def _credenciales_turso():
     """
     Devuelve (url, token) si hay credenciales de Turso, o (None, None).
-    Busca, en este orden:
-      1. st.secrets["turso"]["url"] / ["auth_token"]   (Streamlit Cloud)
-      2. Variables de entorno TURSO_URL / TURSO_TOKEN   (local/CI)
+    Es muy tolerante: busca en st.secrets de varias formas y también en
+    variables de entorno.
     """
     # 1) Streamlit secrets
     try:
         import streamlit as st
-        # Formato A: sección [turso] (recomendado)
-        if "turso" in st.secrets:
-            sec = st.secrets["turso"]
-            url = sec.get("url")
-            token = sec.get("auth_token")
-            if not token:
-                token = (sec.get("t1", "") + sec.get("t2", "")
-                         + sec.get("t3", "")) or None
-            if url and token:
-                return url, token
-        # Formato B: todo dentro de [secrets] con claves planas
-        if "turso_url" in st.secrets:
-            url = st.secrets.get("turso_url")
-            token = st.secrets.get("turso_token")
-            if not token:
-                token = (st.secrets.get("turso_t1", "")
-                         + st.secrets.get("turso_t2", "")
-                         + st.secrets.get("turso_t3", "")) or None
-            if url and token:
-                return url, token
+        sec = st.secrets
+
+        # Recolectar TODAS las claves conocidas, en cualquier sección
+        def _buscar_clave(nombres):
+            """Busca una clave por varios nombres, en raíz y en [turso]/[secrets]."""
+            for nombre in nombres:
+                try:
+                    if nombre in sec:
+                        v = sec[nombre]
+                        if v:
+                            return str(v)
+                except Exception:
+                    pass
+            # Buscar dentro de las secciones habituales
+            for seccion in ("turso", "secrets"):
+                try:
+                    if seccion in sec:
+                        sub = sec[seccion]
+                        for nombre in nombres:
+                            if nombre in sub:
+                                v = sub[nombre]
+                                if v:
+                                    return str(v)
+                except Exception:
+                    pass
+            return None
+
+        # URL
+        url = _buscar_clave(["turso_url", "url", "TURSO_URL"])
+        # Token: entero o en trozos
+        token = _buscar_clave(["turso_token", "auth_token", "token",
+                               "TURSO_TOKEN"])
+        if not token:
+            t1 = _buscar_clave(["turso_t1", "t1"]) or ""
+            t2 = _buscar_clave(["turso_t2", "t2"]) or ""
+            t3 = _buscar_clave(["turso_t3", "t3"]) or ""
+            if t1:
+                token = t1 + t2 + t3
+        if url and token:
+            return url, token
     except Exception:
         pass
 
