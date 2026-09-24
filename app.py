@@ -211,13 +211,14 @@ st.sidebar.markdown("---")
 TODOS_LOS_MODULOS = [
     "🏠 Dashboard", "🌿 Materias primas", "📦 Productos y fórmulas",
     "⚙️ Producción", "📋 Pedidos de producción", "🧴 Envases y etiquetas",
-    "🚚 Proveedores", "💰 Costes", "📊 Avisos", "📤 Salidas",
+    "🫒 Aceites ozonizados", "🚚 Proveedores", "💰 Costes", "📊 Avisos",
+    "📤 Salidas", "📥 Recepción de mercancía",
     "🔬 Escandallos reales", "📐 Planificación MRP", "✅ Control de calidad",
-    "🏷️ Etiquetado", "📄 Informes PDF", "🖨️ Etiqueta térmica",
-    "📖 Manual de uso", "📊 Análisis y gráficos", "📧 Envío de informes",
-    "🔲 Códigos QR", "⚖️ Pesos reales", "📉 Mermas", "🖊️ Firmas digitales",
-    "📈 Rendimiento", "🔄 Reprocesos", "🛒 Órdenes de compra",
-    "📥 Recepción de mercancía",
+    "🏷️ Etiquetas", "📄 Informes PDF", "📖 Manual de uso",
+    "📊 Análisis y gráficos",
+    "📧 Envío de informes", "🔲 Códigos QR", "⚖️ Pesos reales",
+    "📉 Mermas", "🖊️ Firmas digitales", "📈 Rendimiento",
+    "🔄 Reprocesos", "🛒 Órdenes de compra",
 ]
 
 if rol == "admin":
@@ -290,7 +291,8 @@ if seccion == "🏠 Dashboard":
     st.markdown("### 📊 Stock global de materias primas")
     if mp:
         datos = {}
-        for cod, nom, lote, cant, uni, fcad, ubi in mp:
+        for fila in mp:
+            cod, nom, lote, cant, uni, fcad, ubi = fila[:7]
             datos.setdefault((cod, nom, uni), 0)
             datos[(cod, nom, uni)] += cant
         df_mp = pd.DataFrame(
@@ -344,17 +346,43 @@ elif seccion == "🌿 Materias primas":
                     st.rerun()
 
     with tab2:
-        filas = listar_materias()
-        df_mp = df(filas, ["Código", "Nombre", "Lote", "Cantidad", "Unidad", "Caducidad", "Ubicación"])
+        st.markdown("### 📋 Stock actual (materias primas + envases)")
+        from modelos import stock_unificado
+        filas = stock_unificado()
+        df_mp = df(filas, ["Tipo", "Código", "Nombre", "Lote", "Cantidad",
+                            "Unidad", "Proveedor", "€/ud", "Caducidad",
+                            "Ubicación"])
         st.dataframe(df_mp, use_container_width=True)
-        descargar_df(df_mp, "stock_materias_primas.csv")
+        descargar_df(df_mp, "stock_completo.csv")
+
+        # Vista solo materias primas
+        st.markdown("### 🌿 Solo materias primas")
+        filas_mp = listar_materias()
+        df_solo_mp = df(filas_mp, ["Código", "Nombre", "Lote", "Cantidad",
+                                    "Unidad", "Caducidad", "Ubicación",
+                                    "Proveedor", "€/ud", "Uso"])
+        st.dataframe(df_solo_mp, use_container_width=True)
 
     with tab3:
-        cod = st.text_input("Código MP")
+        cod = st.text_input("Código a consultar (MP o envase)")
         if cod:
             filas = lotes_disponibles(cod)
-            df_l = df(filas, ["ID", "Lote", "Cantidad", "Unidad", "Caducidad"])
-            st.dataframe(df_l, use_container_width=True)
+            if filas:
+                df_l = df(filas, ["ID", "Lote", "Cantidad", "Unidad", "Caducidad"])
+                st.dataframe(df_l, use_container_width=True)
+            else:
+                conn_e = conectar()
+                env = conn_e.execute("""
+                    SELECT codigo, lote, cantidad, unidad
+                    FROM envases WHERE codigo = ? AND cantidad > 0
+                """, (cod,)).fetchall()
+                conn_e.close()
+                if env:
+                    st.markdown("**Envases:**")
+                    st.dataframe(df(env, ["Código", "Lote", "Cantidad", "Unidad"]),
+                                 use_container_width=True)
+                else:
+                    st.info("Sin stock de ese código.")
 
 
 # =========================================================
@@ -568,49 +596,97 @@ elif seccion == "📦 Productos y fórmulas":
 # ⚙️ PRODUCCIÓN
 # =========================================================
 elif seccion == "⚙️ Producción":
+    from modelos import ver_formula_detallada, stock_unificado
     st.title("⚙️ Registrar producción")
 
-    col1, col2 = st.columns(2)
-    cod = col1.text_input("Código producto *")
-    cant = col2.number_input("Cantidad a fabricar *", min_value=0.0, step=1.0)
-    lote = col1.text_input("Lote PT (vacío=auto)")
-    fcad = col2.date_input("Caducidad PT", value=None)
+    conn = conectar()
+    prods = conn.execute("SELECT codigo, nombre FROM productos ORDER BY nombre").fetchall()
+    conn.close()
 
-    if cod and cant > 0:
-        coste = calcular_coste_produccion(cod, cant)
-        if coste:
-            st.markdown("### 💰 Previsión de coste")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Materias primas", f"{coste['mp']:.2f} €")
-            c2.metric("Envases", f"{coste['envases']:.2f} €")
-            c3.metric("Mano de obra + ind.", f"{coste['mano_obra'] + coste['indirectos']:.2f} €")
-            c4.metric("Coste unitario", f"{coste['coste_unitario']:.4f} €/ud")
+    if not prods:
+        st.info("Crea primero un producto en 'Productos y fórmulas'.")
+    else:
+        opciones = [f"{c} · {n}" for c, n in prods]
+        sel = st.selectbox("Producto a fabricar", opciones)
+        cod = sel.split(" · ")[0]
+        nombre_prod = sel.split(" · ")[1]
 
-            with st.expander("Ver desglose"):
-                st.write("**Materias primas**")
-                st.dataframe(
-                    pd.DataFrame(coste["detalle_mp"],
-                                 columns=["Código", "Cantidad", "Unidad", "€/ud", "Subtotal"]),
-                    use_container_width=True,
-                )
-                if coste["detalle_env"]:
-                    st.write("**Envases**")
-                    st.dataframe(
-                        pd.DataFrame(coste["detalle_env"],
-                                     columns=["Código", "Cantidad", "€/ud", "Subtotal"]),
-                        use_container_width=True,
-                    )
+        col1, col2 = st.columns(2)
+        cant = col1.number_input("Unidades a fabricar *", min_value=0.0,
+                                  step=1.0)
+        lote = col2.text_input("Lote del producto final (vacío=auto)")
+        fcad = col1.date_input("Caducidad PT", value=None)
 
-    if st.button("🚀 Fabricar"):
-        if not cod or cant <= 0:
-            st.error("Introduce código y cantidad.")
-        else:
-            try:
-                producir(cod, cant, lote or None, str(fcad) if fcad else None)
-                st.success("✔ Producción registrada. Stock descontado (FEFO) y trazabilidad guardada.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
+        # --- Propuesta de fórmula con stock ---
+        if cant > 0:
+            formula = ver_formula_detallada(cod)
+            if not formula:
+                st.warning("Este producto no tiene fórmula definida.")
+            else:
+                st.markdown(f"### 🧪 Fórmula para {cant:.0f} × {nombre_prod}")
+                filas = []
+                todo_ok = True
+                coste_mp_total = 0
+                for cod_mp, nom_mp, c_unid, uni, pct, precio, sub_unid in formula:
+                    necesaria = c_unid * cant
+                    disp, _ = stock_por_codigo(cod_mp)
+                    hay = "✅ Hay" if disp >= necesaria else f"❌ Faltan {necesaria - disp:.3f}"
+                    if disp < necesaria:
+                        todo_ok = False
+                    subtotal = sub_unid * cant
+                    coste_mp_total += subtotal
+                    filas.append([nom_mp, f"{necesaria:.3f}", uni, f"{disp:.3f}",
+                                  hay, f"{precio:.4f} €", f"{subtotal:.2f} €"])
+                df_n = pd.DataFrame(filas, columns=[
+                    "Materia prima", "Necesario", "Unidad", "En stock",
+                    "Estado", "€/unidad", "Coste total"])
+                st.dataframe(df_n, use_container_width=True)
+
+                # --- Envases ---
+                env_formula = ver_formula_envases(cod)
+                if env_formula:
+                    st.markdown("### 🧴 Envases necesarios")
+                    filas_e = []
+                    for env_cod, c_unid in env_formula:
+                        necesaria = c_unid * cant
+                        disp, _ = stock_envase(env_cod)
+                        hay = "✅ Hay" if disp >= necesaria else f"❌ Faltan {necesaria - disp:.0f}"
+                        if disp < necesaria:
+                            todo_ok = False
+                        filas_e.append([env_cod, f"{necesaria:.0f}", f"{disp:.0f}", hay])
+                    st.dataframe(pd.DataFrame(filas_e, columns=[
+                        "Envase", "Necesario", "En stock", "Estado"]),
+                        use_container_width=True)
+
+                # --- Costes ---
+                coste = calcular_coste_produccion(cod, cant)
+                if coste:
+                    st.markdown("### 💰 Coste de esta producción")
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Materias primas", f"{coste['mp']:.2f} €")
+                    c2.metric("Envases", f"{coste['envases']:.2f} €")
+                    c3.metric("MO + indirectos",
+                              f"{coste['mano_obra'] + coste['indirectos']:.2f} €")
+                    c4.metric("Coste unitario", f"{coste['coste_unitario']:.4f} €/ud")
+                    st.metric("COSTE TOTAL", f"{coste['total']:.2f} €")
+
+                if todo_ok:
+                    st.success("✅ Hay stock suficiente para producir.")
+                else:
+                    st.warning("⚠️ Falta stock de algunos materiales.")
+
+        if st.button("🚀 Fabricar"):
+            if not cod or cant <= 0:
+                st.error("Introduce cantidad.")
+            else:
+                try:
+                    producir(cod, cant, lote or None,
+                             str(fcad) if fcad else None)
+                    st.success("✔ Producción registrada. Stock descontado "
+                               "(FEFO) y trazabilidad guardada.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
 
 # =========================================================
@@ -1042,39 +1118,6 @@ elif seccion == "✅ Control de calidad":
 
 
 # =========================================================
-# 🏷️ ETIQUETADO
-# =========================================================
-elif seccion == "🏷️ Etiquetado":
-    st.title("🏷️ Etiquetado automático")
-    tab1, tab2 = st.tabs(["🖨️ Individual", "📄 Masivas"])
-
-    with tab1:
-        cod = st.text_input("Código producto")
-        lote = st.text_input("Lote PT")
-        formato = st.selectbox("Formato", ["pdf", "html", "txt"])
-        if st.button("Generar"):
-            if cod and lote:
-                from informes import generar_etiqueta_termica
-                ruta = f"etiqueta_{cod}_{lote}.pdf"
-                r = generar_etiqueta_termica(cod, lote, 1, 50, 30, ruta)
-                if r and os.path.exists(ruta):
-                    with open(ruta, "rb") as f:
-                        st.download_button("⬇ Descargar", f.read(),
-                                            file_name=ruta, mime="application/pdf")
-
-    with tab2:
-        cod = st.text_input("Código producto", key="mas")
-        lote = st.text_input("Lote PT", key="mas2")
-        n = st.number_input("Nº etiquetas", min_value=1, value=10)
-        if st.button("Generar etiquetas"):
-            ruta = f"etiquetas_{cod}_{lote}_x{n}.pdf"
-            r = generar_etiqueta_termica(cod, lote, int(n), 50, 30, ruta)
-            if r and os.path.exists(ruta):
-                with open(ruta, "rb") as f:
-                    st.download_button("⬇ Descargar PDF", f.read(),
-                                        file_name=ruta, mime="application/pdf")
-
-
 # =========================================================
 # 📄 INFORMES PDF
 # =========================================================
@@ -1098,28 +1141,6 @@ elif seccion == "📄 Informes PDF":
                     f'width="100%" height="800px" style="border:1px solid #ccc;"></iframe>',
                     unsafe_allow_html=True,
                 )
-
-
-# =========================================================
-# 🖨️ ETIQUETA TÉRMICA
-# =========================================================
-elif seccion == "🖨️ Etiqueta térmica":
-    st.title("🖨️ Etiqueta térmica (50×30 mm)")
-    col1, col2 = st.columns(2)
-    cod = col1.text_input("Código producto")
-    lote = col2.text_input("Lote PT")
-    col3, col4, col5 = st.columns(3)
-    ancho = col3.number_input("Ancho (mm)", 30, 100, 50)
-    alto = col4.number_input("Alto (mm)", 20, 80, 30)
-    n = col5.number_input("Nº etiquetas", 1, 500, 1)
-    if st.button("🖨️ Generar PDF"):
-        if cod and lote:
-            ruta = f"etiqueta_termica_{cod}_{lote}.pdf"
-            r = generar_etiqueta_termica(cod, lote, int(n), int(ancho), int(alto), ruta)
-            if r and os.path.exists(ruta):
-                with open(ruta, "rb") as f:
-                    st.download_button("⬇ Descargar", f.read(),
-                                        file_name=ruta, mime="application/pdf")
 
 
 # =========================================================
@@ -1618,6 +1639,226 @@ elif seccion == "📤 Salidas":
                 st.dataframe(df_lote, use_container_width=True)
                 total = df_lote["Cantidad"].sum()
                 st.metric("Total salido de este lote", f"{total:.2f}")
+
+
+# =========================================================
+# 🫒 ACEITES OZONIZADOS
+# =========================================================
+elif seccion == "🫒 Aceites ozonizados":
+    from ozono import (
+        crear_produccion_ozono, listar_producciones_ozono,
+        crear_garrafa, listar_garrafas, detalle_garrafa,
+        crear_salida_garrafa, resumen_stock_ozono,
+    )
+    st.title("🫒 Fabricación de aceites ozonizados")
+
+    res = resumen_stock_ozono()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Garrafas", res["garrafas"])
+    c2.metric("Litros disponibles", f"{res['litros_disponibles']:.1f} L")
+    c3.metric("Capacidad total", f"{res['litros_capacidad']:.1f} L")
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🏭 Nueva producción", "📜 Producciones",
+        "🛢️ Stock de garrafas", "📤 Salidas de aceite",
+    ])
+
+    # ---------- Nueva producción ----------
+    with tab1:
+        with st.form("form_ozono"):
+            st.markdown("#### Datos de la producción")
+            c1, c2, c3 = st.columns(3)
+            litros = c1.number_input("Litros producidos *", min_value=0.0,
+                                      step=0.1)
+            reactor = c2.selectbox("Reactor", ["1", "2"])
+            fecha = c3.date_input("Fecha", value=date.today())
+            c4, c5 = st.columns(2)
+            hora_inicio = c4.text_input("Hora de comienzo", placeholder="10:30")
+            hora_fin = c5.text_input("Hora de finalización", placeholder="14:00")
+
+            st.markdown("#### Parámetros del generador")
+            c6, c7, c8 = st.columns(3)
+            flujo = c6.number_input("Flujo", min_value=0.0, step=0.1)
+            presion = c7.number_input("Presión", min_value=0.0, step=0.1)
+            nitrogeno = c8.selectbox("Nitrógeno", ["sí", "no"])
+            c9, c10 = st.columns(2)
+            trampa_agua = c9.selectbox("Trampa de agua", ["sí", "no"])
+            emulsion = c10.selectbox("Emulsión", ["sí", "no"])
+
+            st.markdown("#### Aceite base")
+            c11, c12, c13 = st.columns(3)
+            aceite_nombre = c11.text_input("Aceite")
+            aceite_lote = c12.text_input("Lote del aceite")
+            proveedor = c13.text_input("Proveedor")
+            responsable = st.text_input("Responsable")
+            obs = st.text_area("Observaciones")
+            crear_garrafa_ahora = st.checkbox(
+                "Crear garrafa con este aceite", value=True)
+            litros_garrafa = st.number_input(
+                "Litros de la garrafa (1/2/5/10)", min_value=1.0,
+                step=1.0, value=10.0)
+
+            if st.form_submit_button("💾 Registrar producción"):
+                if litros <= 0:
+                    st.error("Indica los litros producidos.")
+                else:
+                    num = crear_produccion_ozono(
+                        litros, reactor, "", aceite_nombre, aceite_lote,
+                        proveedor, flujo, presion, nitrogeno, trampa_agua,
+                        emulsion, hora_inicio, hora_fin, obs, responsable,
+                    )
+                    if crear_garrafa_ahora:
+                        cod_g = crear_garrafa(litros_garrafa, num,
+                                              aceite_lote, "Aceite ozonizado")
+                        st.success(f"✔ Producción {num} + garrafa {cod_g}.")
+                    else:
+                        st.success(f"✔ Producción {num} registrada.")
+                    st.rerun()
+
+    # ---------- Listar producciones ----------
+    with tab2:
+        filas = listar_producciones_ozono()
+        df_pr = df(filas, [
+            "Número", "Fecha", "Inicio", "Fin", "Litros", "Reactor",
+            "Aceite", "Lote", "Proveedor", "Flujo", "Presión",
+            "N₂", "Trampa agua", "Emulsión", "Observaciones",
+            "Responsable"])
+        st.dataframe(df_pr, use_container_width=True)
+        descargar_df(df_pr, "producciones_ozono.csv")
+
+    # ---------- Stock de garrafas con desplegable ----------
+    with tab3:
+        st.markdown("### 🛢️ Stock de aceite ozonizado por garrafa")
+        garrafas = listar_garrafas()
+        if not garrafas:
+            st.info("No hay garrafas todavía. Crea una producción.")
+        else:
+            df_g = df(garrafas, ["Garrafa", "Capacidad (L)", "Disponible (L)",
+                                  "Producción", "Lote", "Producto",
+                                  "Llenado", "Ubicación"])
+            st.dataframe(df_g, use_container_width=True)
+
+            st.markdown("### 🔎 Ver detalle de una garrafa")
+            st.caption("Pincha/selecciona una garrafa para ver en qué "
+                       "se ha ido gastando su aceite.")
+            sel_g = st.selectbox("Garrafa", [g[0] for g in garrafas])
+            g, salidas = detalle_garrafa(sel_g)
+            if g:
+                cc1, cc2, cc3 = st.columns(3)
+                cc1.metric("Capacidad", f"{g[1]:.1f} L")
+                cc2.metric("Disponible", f"{g[2]:.1f} L")
+                cc3.metric("Consumido", f"{g[1] - g[2]:.1f} L")
+                st.markdown(f"**Lote:** {g[4] or '—'} · **Producción:** {g[3] or '—'}")
+
+                if salidas:
+                    st.markdown("#### En qué se ha gastado este aceite")
+                    df_s = pd.DataFrame(salidas, columns=[
+                        "Fecha", "Litros", "Destino", "Comentarios",
+                        "Responsable"])
+                    st.dataframe(df_s, use_container_width=True)
+                    total_gastado = sum(s[1] for s in salidas)
+                    st.metric("Total gastado de esta garrafa", f"{total_gastado:.2f} L")
+                else:
+                    st.info("Esta garrafa aún no tiene salidas registradas.")
+
+    # ---------- Salidas de garrafa ----------
+    with tab4:
+        st.markdown("### 📤 Registrar salida de una garrafa")
+        garrafas = listar_garrafas()
+        disponibles = [g for g in garrafas if g[2] > 0]
+        if not disponibles:
+            st.info("No hay garrafas con aceite disponible.")
+        else:
+            opciones_g = [f"{g[0]} · {g[2]:.1f} L disp. (lote {g[4] or '—'})"
+                          for g in disponibles]
+            sel_g = st.selectbox("Garrafa", opciones_g, key="sal_garrafa")
+            cod_g = sel_g.split(" · ")[0]
+
+            with st.form("form_salida_garrafa"):
+                litros = st.number_input("Litros a sacar", min_value=0.0,
+                                          step=0.1)
+                destino = st.text_input("Destino *",
+                                        placeholder="Ej: jabones, crema J, aceite 50 mL")
+                comentarios = st.text_area("Comentarios")
+                responsable = st.text_input("Responsable")
+                if st.form_submit_button("Registrar salida"):
+                    if not destino:
+                        st.error("Indica el destino.")
+                    elif litros <= 0:
+                        st.error("Indica los litros.")
+                    else:
+                        ok, msg = crear_salida_garrafa(
+                            cod_g, litros, destino, comentarios, responsable)
+                        if ok:
+                            st.success(f"✔ {msg}")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+
+# =========================================================
+# 🏷️ ETIQUETAS
+# =========================================================
+elif seccion == "🏷️ Etiquetas":
+    from etiquetas import (subir_etiqueta, listar_etiquetas,
+                           obtener_etiqueta, ultima_etiqueta)
+    st.title("🏷️ Etiquetas de producto")
+    st.caption("Sube el PDF de la etiqueta final de cada producto. "
+               "Se guardan versiones para poder actualizarlas.")
+
+    tab1, tab2 = st.tabs(["⬆️ Subir etiqueta", "📋 Ver / descargar"])
+
+    with tab1:
+        conn = conectar()
+        prods = conn.execute("SELECT codigo, nombre FROM productos ORDER BY nombre").fetchall()
+        conn.close()
+        if not prods:
+            st.info("No hay productos. Créalos en 'Productos y fórmulas'.")
+        else:
+            opciones = [f"{c} · {n}" for c, n in prods]
+            sel = st.selectbox("Producto", opciones)
+            cod = sel.split(" · ")[0]
+            nom = sel.split(" · ")[1]
+            pdf = st.file_uploader("Etiqueta (PDF)", type=["pdf"])
+            comentarios = st.text_input("Comentarios / versión")
+            if st.button("⬆️ Subir etiqueta"):
+                if not pdf:
+                    st.error("Selecciona un PDF.")
+                else:
+                    v = subir_etiqueta(cod, nom, pdf.name, pdf.read(),
+                                       comentarios)
+                    st.success(f"✔ Etiqueta subida (versión {v}).")
+                    st.rerun()
+
+    with tab2:
+        filas = listar_etiquetas()
+        if not filas:
+            st.info("No hay etiquetas subidas.")
+        else:
+            df_e = df(filas, ["ID", "Código", "Producto", "Versión",
+                              "Fichero", "Fecha", "Comentarios"])
+            st.dataframe(df_e, use_container_width=True)
+
+            st.markdown("### ⬇️ Descargar una etiqueta")
+            opciones_e = [f"{f[0]} · {f[2]} v{f[3]} ({f[4]})" for f in filas]
+            sel_e = st.selectbox("Etiqueta", opciones_e)
+            id_e = int(sel_e.split(" · ")[0])
+            nombre_f, contenido = obtener_etiqueta(id_e)
+            if contenido:
+                st.download_button("⬇ Descargar PDF", contenido,
+                                    file_name=nombre_f or "etiqueta.pdf",
+                                    mime="application/pdf")
+
+            st.markdown("### 📌 Última versión por producto")
+            productos_unicos = sorted(set((f[1], f[2]) for f in filas))
+            for cod_p, nom_p in productos_unicos:
+                id_u, nom_f, cont = ultima_etiqueta(cod_p)
+                if cont:
+                    with st.expander(f"{nom_p} ({cod_p})"):
+                        st.download_button(
+                            "⬇ Descargar última etiqueta", cont,
+                            file_name=nom_f or f"etiqueta_{cod_p}.pdf",
+                            mime="application/pdf", key=f"dl_{cod_p}")
 
 
 # =========================================================
