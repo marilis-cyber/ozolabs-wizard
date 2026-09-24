@@ -101,10 +101,33 @@ def logo_base64(ruta="assets/logo.svg"):
 # =========================================================
 # INICIALIZACIÓN
 # =========================================================
+# =========================================================
+# INICIALIZACIÓN (con caché para no repetir en cada rerun)
+# =========================================================
+@st.cache_resource
+def _inicializar_bd_una_vez():
+    """Crea tablas y admin UNA SOLA VEZ por proceso (cacheado).
+    Evita lanzar decenas de peticiones a Turso en cada re-ejecución."""
+    _err = []
+    try:
+        crear_tablas()
+    except Exception as e:
+        _err.append(f"crear_tablas: {type(e).__name__}: {e}")
+    try:
+        crear_tabla_usuarios()
+    except Exception as e:
+        _err.append(f"crear_tabla_usuarios: {type(e).__name__}: {e}")
+    try:
+        crear_admin_inicial()
+    except Exception as e:
+        _err.append(f"crear_admin_inicial: {type(e).__name__}: {e}")
+    return _err
+
+
 if "db_inicializada" not in st.session_state:
-    crear_tablas()
-    crear_tabla_usuarios()
-    crear_admin_inicial()
+    _err_inicio = _inicializar_bd_una_vez()
+    if _err_inicio:
+        st.session_state["errores_inicio"] = _err_inicio
     st.session_state.db_inicializada = True
 
 
@@ -138,6 +161,17 @@ def pantalla_login():
         """,
         unsafe_allow_html=True,
     )
+
+    # Mostrar errores de arranque si los hubo
+    if st.session_state.get("errores_inicio"):
+        with st.expander("⚠️ Avisos del arranque (diagnóstico)", expanded=True):
+            for e in st.session_state["errores_inicio"]:
+                st.code(e, language="text")
+            if st.button("🔁 Reintentar arranque"):
+                st.session_state.pop("errores_inicio", None)
+                st.session_state.pop("db_inicializada", None)
+                st.rerun()
+
     with st.form("login"):
         u = st.text_input("Usuario")
         p = st.text_input("Contraseña", type="password")
