@@ -1,7 +1,7 @@
 """
 OZOLABS' WIZARD - Usuarios, roles, permisos y auditoría
 """
-from database import conectar
+from database import conectar, ConexionTurso as _ConexionTurso
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 import jwt
@@ -83,8 +83,8 @@ def verificar_password(password, hash_guardado):
 def crear_tabla_usuarios():
     """Crea las tablas de usuarios y auditoría si no existen."""
     conn = conectar()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS usuarios (
+    sqls = [
+        """CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             usuario TEXT UNIQUE NOT NULL,
             nombre TEXT NOT NULL,
@@ -94,18 +94,24 @@ def crear_tabla_usuarios():
             activo INTEGER DEFAULT 1,
             fecha_creacion TEXT,
             ultimo_acceso TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS auditoria (
+        )""",
+        """CREATE TABLE IF NOT EXISTS auditoria (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             fecha TEXT NOT NULL,
             usuario TEXT,
             accion TEXT,
             detalle TEXT
-        )
-    """)
-    conn.commit()
+        )""",
+    ]
+    if isinstance(conn, _ConexionTurso):
+        try:
+            conn.execute_lote(sqls)
+        except Exception as e:
+            print(f"⚠ Error creando tablas de usuarios: {e}")
+    else:
+        for sql in sqls:
+            conn.execute(sql)
+        conn.commit()
     conn.close()
 
 
