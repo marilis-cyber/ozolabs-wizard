@@ -211,8 +211,12 @@ class _ConexionTurso:
                 with urllib.request.urlopen(req, timeout=30) as r:
                     return json.loads(r.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
-                cuerpo = e.read().decode("utf-8", errors="replace")
-                ultimo_error = f"Turso HTTP {e.code}: {cuerpo[:300]}"
+                try:
+                    cuerpo = e.read().decode("utf-8", errors="replace")
+                except Exception:
+                    cuerpo = "(sin cuerpo)"
+                ultimo_error = (f"Turso HTTP {e.code} · {e.reason} · "
+                                f"url={self._url} · resp={cuerpo[:400]}")
                 # Error de servidor / rate limit → esperar y reintentar
                 if e.code in (429, 500, 502, 503, 504) and intento < 2:
                     _time.sleep(1.5 * (intento + 1))
@@ -731,7 +735,10 @@ def crear_tablas():
                 conn.execute(sql)
             except Exception as e:
                 print(f"⚠ Error creando tabla: {e}")
-    _migrar_columnas(conn)
+    try:
+        _migrar_columnas(conn)
+    except Exception as e:
+        print(f"⚠ Error en migraciones: {e}")
     conn.commit()
     conn.close()
     print("✔ OZOLABS' WIZARD · Base de datos lista.")
