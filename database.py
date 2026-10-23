@@ -653,6 +653,105 @@ def _tablas_sql():
             comentarios TEXT,
             responsable TEXT
         )""",
+        """CREATE TABLE IF NOT EXISTS entradas_mp (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha TEXT NOT NULL,
+            materia_codigo TEXT NOT NULL,
+            materia_nombre TEXT NOT NULL,
+            lote_interno TEXT NOT NULL,
+            lote_proveedor TEXT,
+            proveedor TEXT,
+            uso TEXT DEFAULT 'cosmetico',
+            cantidad REAL NOT NULL,
+            unidad TEXT NOT NULL,
+            fecha_caducidad TEXT,
+            documento_fichero TEXT,
+            documento_base64 TEXT,
+            documento_tipo TEXT,
+            observaciones TEXT,
+            usuario TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS catalogo_mp (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo TEXT UNIQUE NOT NULL,
+            nombre TEXT NOT NULL,
+            inci TEXT,
+            proveedor TEXT,
+            uso TEXT DEFAULT 'cosmetico'
+        )""",
+        """CREATE TABLE IF NOT EXISTS expediciones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero TEXT UNIQUE NOT NULL,
+            fecha TEXT NOT NULL,
+            destino TEXT NOT NULL,
+            cliente TEXT,
+            pedido_factura TEXT,
+            observaciones TEXT,
+            usuario TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS expedicion_lineas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            expedicion_numero TEXT NOT NULL,
+            producto_codigo TEXT,
+            producto_nombre TEXT,
+            lote TEXT NOT NULL,
+            cantidad REAL NOT NULL,
+            unidad TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS formulas_biblioteca (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo TEXT NOT NULL,
+            nombre TEXT NOT NULL,
+            version INTEGER DEFAULT 1,
+            estado TEXT DEFAULT 'activa',
+            fecha_creacion TEXT,
+            fecha_modificacion TEXT,
+            procedimiento TEXT,
+            parametros TEXT,
+            observaciones TEXT,
+            documento_fichero TEXT,
+            documento_base64 TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS formulas_biblioteca_ingredientes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            formula_id INTEGER NOT NULL,
+            ingrediente TEXT NOT NULL,
+            codigo TEXT,
+            ecologico INTEGER DEFAULT 0,
+            porcentaje REAL DEFAULT 0,
+            cantidad REAL DEFAULT 0,
+            unidad TEXT,
+            funcion TEXT,
+            orden INTEGER DEFAULT 0
+        )""",
+        """CREATE TABLE IF NOT EXISTS hojas_fabricacion (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero TEXT UNIQUE NOT NULL,
+            formula_id INTEGER,
+            formula_codigo TEXT,
+            formula_nombre TEXT,
+            formula_version INTEGER,
+            producto_codigo TEXT,
+            producto_nombre TEXT,
+            lote_pt TEXT,
+            cantidad_objetivo REAL,
+            unidad_objetivo TEXT,
+            fecha TEXT,
+            estado TEXT DEFAULT 'borrador',
+            observaciones TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS hojas_fabricacion_lineas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hoja_numero TEXT NOT NULL,
+            ingrediente TEXT,
+            porcentaje REAL,
+            cantidad_teorica REAL,
+            unidad TEXT,
+            materia_codigo TEXT,
+            materia_lote TEXT,
+            cantidad_real REAL,
+            unidad_real TEXT
+        )""",
         """CREATE TABLE IF NOT EXISTS ozono_producciones (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             numero TEXT UNIQUE NOT NULL,
@@ -773,6 +872,9 @@ def _migrar_columnas(conn):
         ("productos", "envase_codigo", "TEXT"),
         ("productos", "caducidad_meses", "INTEGER DEFAULT 0"),
         ("formulas", "porcentaje", "REAL DEFAULT 0"),
+        ("formulas_biblioteca_ingredientes", "codigo", "TEXT"),
+        ("formulas_biblioteca_ingredientes", "ecologico", "INTEGER DEFAULT 0"),
+        ("catalogo_mp", "inci", "TEXT"),
     ]
     for tabla, columna, tipo in migraciones:
         try:

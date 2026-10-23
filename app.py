@@ -32,9 +32,22 @@ from modelos import (
     listar_lotes_por_estado,
 )
 from avisos import generar_avisos
+from gestion import (
+    fmt_fecha,
+    registrar_entrada_mp, listar_entradas_mp, resumen_lotes_mp,
+    obtener_documento_entrada,
+    importar_catalogo_mp, listar_catalogo_mp, actualizar_proveedor_catalogo,
+    crear_expedicion, listar_expediciones, lineas_expedicion,
+    todas_lineas_expediciones,
+    crear_formula, nueva_version_formula, listar_formulas,
+    buscar_formulas, obtener_formula, duplicar_formula, eliminar_formula,
+    importar_formulas,
+    calcular_cantidades_formula, crear_hoja_fabricacion,
+    listar_hojas_fabricacion, lineas_hoja, confirmar_hoja_fabricacion,
+)
 from usuarios import (
     autenticar, crear_usuario, listar_usuarios, cambiar_rol,
-    activar_desactivar, cambiar_password, ver_auditoria,
+    activar_desactivar, cambiar_password, eliminar_usuario, ver_auditoria,
     crear_admin_inicial, crear_tabla_usuarios, ROLES, puede_acceder,
 )
 from analytics import (
@@ -176,42 +189,61 @@ def pantalla_login():
         u = st.text_input("Usuario")
         p = st.text_input("Contraseña", type="password")
         if st.form_submit_button("Entrar", use_container_width=True):
-            datos = autenticar(u, p)
-            if datos:
-                st.session_state.usuario = datos
-                st.rerun()
-            else:
-                st.error("Credenciales incorrectas")
+            try:
+                datos = autenticar(u, p)
+                if datos:
+                    st.session_state.usuario = datos
+                    st.rerun()
+                else:
+                    st.error("Credenciales incorrectas")
+            except Exception as e:
+                st.error(f"⚠ Error de conexión: {type(e).__name__}: {e}")
 
     # --- Diagnóstico y rescate ---
     with st.expander("🔧 ¿No puedes entrar? Diagnóstico"):
-        from database import conectar as _conn
-        c = _conn()
-        n = c.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
-        filas = c.execute(
-            "SELECT usuario, rol, activo FROM usuarios ORDER BY usuario"
-        ).fetchall()
-        c.close()
-        st.write(f"Usuarios en la base de datos: **{n}**")
-        if filas:
-            st.dataframe(
-                pd.DataFrame(filas, columns=["Usuario", "Rol", "Activo"]),
-                use_container_width=True,
-            )
-        else:
-            st.warning(
-                "No hay ningún usuario. Pulsa el botón de abajo para crear "
-                "el usuario **admin / admin**."
-            )
-        if st.button("🔄 Crear / restaurar admin (admin/admin)"):
-            from usuarios import reset_admin
-            if reset_admin():
-                st.success("✔ admin/admin creado. Ya puedes entrar.")
+        from database import conectar as _conn, _credenciales_turso
+
+        # 0) Ver qué credenciales llegaron (token enmascarado)
+        try:
+            _url, _tok = _credenciales_turso()
+            st.write(f"**URL detectada:** `{_url or '(ninguna)'}`")
+            if _tok:
+                st.write(f"**Token:** longitud {len(_tok)}, empieza por "
+                         f"`{_tok[:12]}...`, termina en `...{_tok[-8:]}`")
             else:
-                st.error(
-                    "✘ No se pudo crear. Falta o falla `passlib`/`bcrypt`. "
-                    "Revisa los logs del Space."
+                st.error("No se detectó token de Turso.")
+        except Exception as e:
+            st.error(f"Error leyendo credenciales: {e}")
+
+        # 1) Probar conexión (mostrando el error real)
+        try:
+            c = _conn()
+            n = c.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
+            filas = c.execute(
+                "SELECT usuario, rol, activo FROM usuarios ORDER BY usuario"
+            ).fetchall()
+            c.close()
+            st.success(f"✅ Conexión OK. Usuarios: {n}")
+            if filas:
+                st.dataframe(
+                    pd.DataFrame(filas, columns=["Usuario", "Rol", "Activo"]),
+                    use_container_width=True,
                 )
+            else:
+                st.warning("No hay ningún usuario.")
+        except Exception as e:
+            st.error("❌ Error de conexión con la base de datos:")
+            st.code(f"{type(e).__name__}: {e}", language="text")
+
+        if st.button("🔄 Crear / restaurar admin (admin/admin)"):
+            try:
+                from usuarios import reset_admin
+                if reset_admin():
+                    st.success("✔ admin/admin creado. Ya puedes entrar.")
+                else:
+                    st.error("✘ No se pudo crear.")
+            except Exception as e:
+                st.error(f"✘ Error: {type(e).__name__}: {e}")
 
 
 if not st.session_state.usuario:
@@ -244,6 +276,7 @@ st.sidebar.markdown("---")
 
 TODOS_LOS_MODULOS = [
     "🏠 Dashboard", "🌿 Materias primas", "📦 Productos y fórmulas",
+    "📚 Biblioteca de fórmulas", "🧪 Hojas de fabricación",
     "⚙️ Producción", "📋 Pedidos de producción", "🧴 Envases y etiquetas",
     "🫒 Aceites ozonizados", "🚚 Proveedores", "💰 Costes", "📊 Avisos",
     "📤 Salidas", "📥 Recepción de mercancía",
@@ -338,7 +371,9 @@ if seccion == "🏠 Dashboard":
 
     st.markdown("### 📦 Stock producto terminado")
     if pt:
-        df_pt = df(pt, ["Código", "Producto", "Lote", "Cantidad", "Caducidad", "Fabricación"])
+        df_pt = pd.DataFrame(
+            [[f[0], f[1], f[2], f[3], fmt_fecha(f[4]), fmt_fecha(f[5])] for f in pt],
+            columns=["Código", "Producto", "Lote", "Cantidad", "Caducidad", "Fabricación"])
         st.dataframe(df_pt, use_container_width=True)
 
 
@@ -347,9 +382,131 @@ if seccion == "🏠 Dashboard":
 # =========================================================
 elif seccion == "🌿 Materias primas":
     st.title("🌿 Materias primas")
-    tab1, tab2, tab3 = st.tabs(["➕ Añadir lote", "📋 Stock actual", "🔍 Lotes de un código"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📥 Registrar entrada", "➕ Añadir lote (simple)",
+        "📋 Stock actual", "🔍 Lotes de un código", "📚 Catálogo MP",
+    ])
 
+    # ---------- TAB 1: registro de entradas ----------
     with tab1:
+        st.markdown("### 📥 Registrar entrada de materia prima")
+        st.caption("La cantidad recibida se suma automáticamente al stock y se "
+                   "conserva un historial de todas las entradas.")
+        conn = conectar()
+        mp_existentes = conn.execute(
+            "SELECT DISTINCT codigo, nombre FROM materias_primas ORDER BY nombre"
+        ).fetchall()
+        conn.close()
+        opciones_mp = ["(nueva materia prima)"] + [f"{c} · {n}" for c, n in mp_existentes]
+
+        with st.form("form_entrada_mp"):
+            sel_mp = st.selectbox("Materia prima existente (opcional)", opciones_mp)
+            c1, c2 = st.columns(2)
+            if sel_mp == "(nueva materia prima)":
+                codigo = c1.text_input("Código *")
+                nombre = c2.text_input("Nombre *")
+            else:
+                codigo_pre = sel_mp.split(" · ")[0]
+                nombre_pre = sel_mp.split(" · ")[1]
+                codigo = c1.text_input("Código *", value=codigo_pre, disabled=True)
+                nombre = c2.text_input("Nombre *", value=nombre_pre)
+
+            c3, c4 = st.columns(2)
+            fecha = c3.date_input("Fecha de entrada", value=date.today())
+            proveedor = c4.text_input("Proveedor")
+
+            c5, c6 = st.columns(2)
+            uso = c5.selectbox("Uso", ["cosmetico", "alimentario", "ambos"])
+            lote_proveedor = c6.text_input("Nº de lote del proveedor")
+
+            c7, c8 = st.columns(2)
+            lote_interno = c7.text_input("Lote interno (vacío = auto)")
+            cantidad = c8.number_input("Cantidad recibida *", min_value=0.0, step=0.1)
+
+            c9, c10 = st.columns(2)
+            unidad = c9.selectbox("Unidad *", ["kg", "g", "L", "mL", "ud"])
+            fcad = c10.date_input("Fecha de caducidad / consumo preferente", value=None)
+
+            doc_tipo = st.selectbox(
+                "Documentación asociada",
+                ["(sin documento)", "Ficha técnica", "Certificado ecológico",
+                 "Certificado de análisis", "Otro"])
+            doc = st.file_uploader("Subir documento (PDF / imagen)")
+            observaciones = st.text_area("Observaciones")
+
+            if st.form_submit_button("💾 Guardar entrada"):
+                if not codigo or not nombre or cantidad <= 0:
+                    st.error("Código, nombre y cantidad son obligatorios.")
+                else:
+                    lote_final = lote_interno or f"{codigo}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                    doc_b64 = None
+                    doc_nombre = None
+                    if doc is not None:
+                        doc_b64 = base64.b64encode(doc.getvalue()).decode()
+                        doc_nombre = doc.name
+                    ok = registrar_entrada_mp(
+                        str(fecha), codigo, nombre, lote_final,
+                        lote_proveedor, proveedor, uso, cantidad, unidad,
+                        str(fcad) if fcad else None,
+                        doc_nombre, doc_b64,
+                        None if doc_tipo == "(sin documento)" else doc_tipo,
+                        observaciones, user["usuario"],
+                    )
+                    if ok:
+                        st.success(f"✔ Entrada registrada. Stock de {codigo} actualizado.")
+                        st.rerun()
+                    else:
+                        st.error("No se pudo registrar la entrada.")
+
+        st.markdown("---")
+        st.markdown("### 📜 Historial de entradas")
+        filas_ent = listar_entradas_mp()
+        if filas_ent:
+            df_ent = pd.DataFrame(
+                [[fmt_fecha(f[1]), f[2], f[3], f[4], f[5], f[6], f[7],
+                  f[8], f[9], fmt_fecha(f[10]), f[11], f[12], f[13], f[14]]
+                 for f in filas_ent],
+                columns=["Fecha", "Código", "Nombre", "Lote", "Lote prov.",
+                         "Proveedor", "Uso", "Cantidad", "Ud", "Caducidad",
+                         "Documento", "Tipo doc", "Observaciones", "Usuario"])
+            st.dataframe(df_ent, use_container_width=True)
+            descargar_df(df_ent, "entradas_mp.csv")
+
+            st.markdown("### 📎 Descargar documento de una entrada")
+            ent_con_doc = [f for f in filas_ent if f[11]]
+            if ent_con_doc:
+                sel_ent = st.selectbox(
+                    "Entrada",
+                    [f"#{f[0]} · {f[2]} · {f[3]} ({f[11]})" for f in ent_con_doc])
+                ent_id = int(sel_ent.split(" · ")[0].lstrip("#"))
+                nom_doc, b64_doc = obtener_documento_entrada(ent_id)
+                if nom_doc and b64_doc:
+                    try:
+                        st.download_button("⬇ Descargar documento",
+                                           base64.b64decode(b64_doc),
+                                           file_name=nom_doc)
+                    except Exception:
+                        st.warning("No se pudo decodificar el documento.")
+            else:
+                st.caption("Ninguna entrada tiene documento adjunto.")
+        else:
+            st.info("Sin entradas registradas.")
+
+        st.markdown("### 📦 Resumen por lote (recibido vs restante)")
+        filas_res = resumen_lotes_mp()
+        if filas_res:
+            df_res = pd.DataFrame(
+                [[f[0], f[1], f[7], f[2], f[3], f[4], fmt_fecha(f[5]),
+                  fmt_fecha(f[6])] for f in filas_res],
+                columns=["Código", "Lote", "Recibido", "Restante", "Ud",
+                         "Proveedor", "Fecha recepción", "Caducidad"])
+            st.dataframe(df_res, use_container_width=True)
+            descargar_df(df_res, "resumen_lotes_mp.csv")
+        else:
+            st.info("Sin stock de materias primas.")
+
+    # ---------- TAB 2: alta rápida (legacy) ----------
+    with tab2:
         with st.form("form_mp"):
             c1, c2 = st.columns(2)
             codigo = c1.text_input("Código *")
@@ -379,30 +536,38 @@ elif seccion == "🌿 Materias primas":
                     st.success("✔ Materia prima añadida.")
                     st.rerun()
 
-    with tab2:
+    # ---------- TAB 3: stock actual ----------
+    with tab3:
         st.markdown("### 📋 Stock actual (materias primas + envases)")
         from modelos import stock_unificado
         filas = stock_unificado()
-        df_mp = df(filas, ["Tipo", "Código", "Nombre", "Lote", "Cantidad",
-                            "Unidad", "Proveedor", "€/ud", "Caducidad",
-                            "Ubicación"])
+        df_mp = pd.DataFrame(
+            [[f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7],
+              fmt_fecha(f[8]), f[9]] for f in filas],
+            columns=["Tipo", "Código", "Nombre", "Lote", "Cantidad",
+                     "Unidad", "Proveedor", "€/ud", "Caducidad", "Ubicación"])
         st.dataframe(df_mp, use_container_width=True)
         descargar_df(df_mp, "stock_completo.csv")
 
         # Vista solo materias primas
         st.markdown("### 🌿 Solo materias primas")
         filas_mp = listar_materias()
-        df_solo_mp = df(filas_mp, ["Código", "Nombre", "Lote", "Cantidad",
-                                    "Unidad", "Caducidad", "Ubicación",
-                                    "Proveedor", "€/ud", "Uso"])
+        df_solo_mp = pd.DataFrame(
+            [[f[0], f[1], f[2], f[3], f[4], fmt_fecha(f[5]), f[6],
+              f[7], f[8], f[9]] for f in filas_mp],
+            columns=["Código", "Nombre", "Lote", "Cantidad", "Unidad",
+                     "Caducidad", "Ubicación", "Proveedor", "€/ud", "Uso"])
         st.dataframe(df_solo_mp, use_container_width=True)
 
-    with tab3:
+    # ---------- TAB 4: lotes de un código ----------
+    with tab4:
         cod = st.text_input("Código a consultar (MP o envase)")
         if cod:
             filas = lotes_disponibles(cod)
             if filas:
-                df_l = df(filas, ["ID", "Lote", "Cantidad", "Unidad", "Caducidad"])
+                df_l = pd.DataFrame(
+                    [[f[0], f[1], f[2], f[3], fmt_fecha(f[4])] for f in filas],
+                    columns=["ID", "Lote", "Cantidad", "Unidad", "Caducidad"])
                 st.dataframe(df_l, use_container_width=True)
             else:
                 conn_e = conectar()
@@ -417,6 +582,75 @@ elif seccion == "🌿 Materias primas":
                                  use_container_width=True)
                 else:
                     st.info("Sin stock de ese código.")
+
+    # ---------- TAB 5: catálogo de materias primas (importación masiva) ----------
+    with tab5:
+        st.markdown("### 📚 Catálogo de materias primas")
+        st.caption("Sube tu lista de materias primas (código + nombre) de una vez. "
+                   "Luego puedes ir añadiendo el proveedor y los lotes de cada una.")
+
+        with st.expander("📥 Importar lista (pegar desde Excel)"):
+            st.caption("Copia tus columnas desde Excel y pégalas aquí. "
+                       "Formato: una materia prima por línea con **código** y **nombre** "
+                       "separados por tabulador o por ';'.")
+            texto_pegar = st.text_area(
+                "Pegar aquí", height=180,
+                placeholder="MP-001\tAceite de oliva\nMP-002\tManteca de karité\n...")
+            subir_csv = st.file_uploader(
+                "O sube un CSV (columnas: código, nombre, proveedor opcional)",
+                type=["csv", "txt"])
+            if st.button("📥 Importar al catálogo"):
+                items = []
+                if subir_csv is not None:
+                    try:
+                        contenido = subir_csv.read().decode("utf-8-sig")
+                        for linea in contenido.splitlines():
+                            partes = [p.strip() for p in linea.replace(";", "\t").split("\t")]
+                            if len(partes) >= 2 and partes[0]:
+                                items.append({"codigo": partes[0], "nombre": partes[1],
+                                              "proveedor": partes[2] if len(partes) > 2 else ""})
+                    except Exception as e:
+                        st.error(f"Error leyendo el archivo: {e}")
+                elif texto_pegar.strip():
+                    for linea in texto_pegar.splitlines():
+                        partes = [p.strip() for p in linea.replace(";", "\t").split("\t")]
+                        if len(partes) >= 2 and partes[0]:
+                            items.append({"codigo": partes[0], "nombre": partes[1],
+                                          "proveedor": partes[2] if len(partes) > 2 else ""})
+                if not items:
+                    st.warning("No se detectó ninguna materia prima. Revisa el formato.")
+                else:
+                    importados, existentes = importar_catalogo_mp(items)
+                    st.success(f"✔ {importados} importadas · {existentes} ya existían.")
+                    st.rerun()
+
+        filas_cat = listar_catalogo_mp()
+        if not filas_cat:
+            st.info("El catálogo está vacío. Importa tu lista o añade materias primas "
+                    "desde 'Registrar entrada'.")
+        else:
+            df_cat = pd.DataFrame(
+                [[f[0], f[1], f[2], f[3], f[4], f[5]] for f in filas_cat],
+                columns=["ID", "Código", "Nombre", "INCI", "Proveedor", "Uso"])
+            st.dataframe(df_cat, use_container_width=True)
+            descargar_df(df_cat, "catalogo_mp.csv")
+
+            st.markdown("### ✏️ Añadir / cambiar proveedor y uso")
+            opciones_cat = [f"{f[0]} · {f[1]} · {f[2]}" for f in filas_cat]
+            sel_cat = st.selectbox("Materia prima", opciones_cat)
+            cat_id = int(sel_cat.split(" · ")[0])
+            cat_prov = next((f[4] for f in filas_cat if f[0] == cat_id), "")
+            cat_uso = next((f[5] for f in filas_cat if f[0] == cat_id), "cosmetico")
+            with st.form("form_proveedor_cat"):
+                c1, c2 = st.columns(2)
+                nuevo_prov = c1.text_input("Proveedor", value=cat_prov or "")
+                usos = ["cosmetico", "alimentario", "ambos"]
+                nuevo_uso = c2.selectbox("Uso", usos,
+                                         index=usos.index(cat_uso) if cat_uso in usos else 0)
+                if st.form_submit_button("💾 Guardar"):
+                    actualizar_proveedor_catalogo(cat_id, nuevo_prov, nuevo_uso)
+                    st.success("✔ Guardado.")
+                    st.rerun()
 
 
 # =========================================================
@@ -644,8 +878,9 @@ elif seccion == "📦 Productos y fórmulas":
         st.markdown("### Stock de producto terminado (PT)")
         st.caption("Aquí se ven los lotes de producto ya fabricados.")
         filas = stock_producto_terminado()
-        df_pt = df(filas, ["Código", "Producto", "Lote", "Cantidad",
-                            "Caducidad", "Fabricación"])
+        df_pt = pd.DataFrame(
+            [[f[0], f[1], f[2], f[3], fmt_fecha(f[4]), fmt_fecha(f[5])] for f in filas],
+            columns=["Código", "Producto", "Lote", "Cantidad", "Caducidad", "Fabricación"])
         st.dataframe(df_pt, use_container_width=True)
         descargar_df(df_pt, "stock_producto_terminado.csv")
 
@@ -653,8 +888,445 @@ elif seccion == "📦 Productos y fórmulas":
         lote = st.text_input("Lote PT", key="traz_pt")
         if lote:
             filas_t = trazabilidad_lote(lote)
-            df_t = df(filas_t, ["MP", "Lote MP", "Cantidad usada", "Fecha"])
+            df_t = pd.DataFrame(
+                [[f[0], f[1], f[2], fmt_fecha(f[3])] for f in filas_t],
+                columns=["MP", "Lote MP", "Cantidad usada", "Fecha"])
             st.dataframe(df_t, use_container_width=True)
+
+
+# =========================================================
+# 📚 BIBLIOTECA DE FÓRMULAS (independiente del inventario)
+# =========================================================
+elif seccion == "📚 Biblioteca de fórmulas":
+    st.title("📚 Biblioteca de fórmulas")
+    st.caption("Biblioteca independiente del inventario. Las fórmulas se guardan "
+               "como documento técnico y se vinculan a materias primas al "
+               "preparar una hoja de fabricación.")
+
+    tab1, tab2, tab3 = st.tabs(["📚 Consultar y gestionar", "➕ Crear / nueva versión", "📥 Importar desde Excel"])
+
+    with tab1:
+        c1, c2 = st.columns([3, 1])
+        texto = c1.text_input("🔎 Buscar por nombre, código o ingrediente")
+        ver_historico = c2.checkbox("Ver históricas")
+        filas = (buscar_formulas(texto, solo_activas=not ver_historico) if texto
+                 else listar_formulas(solo_activas=not ver_historico))
+
+        if filas:
+            df_f = pd.DataFrame(
+                [[f[0], f[1], f[2], f[3], f[4], fmt_fecha(f[5]), fmt_fecha(f[6]), f[7]]
+                 for f in filas],
+                columns=["ID", "Código", "Nombre", "Versión", "Estado",
+                         "Creada", "Modificada", "Observaciones"])
+            st.dataframe(df_f, use_container_width=True)
+            descargar_df(df_f, "biblioteca_formulas.csv")
+
+            sel_id = st.selectbox(
+                "Fórmula", [f"{f[0]} · {f[1]} · {f[2]} v{f[3]}" for f in filas])
+            fid = int(sel_id.split(" · ")[0])
+            cab, ings = obtener_formula(fid)
+
+            if cab:
+                st.markdown(f"### 🧪 {cab[2]} · v{cab[3]} ({cab[1]})")
+                if ings:
+                    df_i = pd.DataFrame(
+                        [[i[0], i[1], "🌿" if i[2] else "", i[3], i[4], i[5], i[6]]
+                         for i in ings],
+                        columns=["Ingrediente", "Código", "Eco", "%", "Cantidad", "Unidad", "Función"])
+                    st.dataframe(df_i, use_container_width=True)
+                    total_pct = sum(i[3] for i in ings)
+                    st.caption(f"Suma de porcentajes: {total_pct:.1f} %")
+                else:
+                    st.info("Sin ingredientes.")
+                if cab[7]:
+                    st.markdown("#### 📝 Procedimiento")
+                    st.markdown(cab[7])
+                if cab[8]:
+                    st.markdown("#### ⚙️ Parámetros técnicos")
+                    st.markdown(cab[8])
+                if cab[9]:
+                    st.markdown(f"#### 📝 Observaciones\n{cab[9]}")
+                if cab[10]:
+                    st.info(f"📎 Documento adjunto: {cab[10]}")
+                    if cab[11]:
+                        try:
+                            st.download_button("⬇ Descargar documento",
+                                               base64.b64decode(cab[11]),
+                                               file_name=cab[10])
+                        except Exception:
+                            pass
+
+                with st.expander("🖨️ Imprimir / exportar fórmula"):
+                    lineas_txt = [f"{cab[2]} · v{cab[3]} ({cab[1]})", "",
+                                  "Ingredientes:", ""]
+                    for i in ings:
+                        partes = [i[0]]
+                        if i[1]:
+                            partes.append(f"[{i[1]}]")
+                        if i[2]:
+                            partes.append("(ECO)")
+                        if i[3]:
+                            partes.append(f"{i[3]}%")
+                        if i[4]:
+                            partes.append(str(i[4]))
+                        if i[5]:
+                            partes.append(i[5])
+                        if i[6]:
+                            partes.append(f"({i[6]})")
+                        lineas_txt.append("- " + " ".join(partes))
+                    if cab[7]:
+                        lineas_txt += ["", "Procedimiento:", cab[7]]
+                    if cab[8]:
+                        lineas_txt += ["", "Parámetros técnicos:", cab[8]]
+                    if cab[9]:
+                        lineas_txt += ["", "Observaciones:", cab[9]]
+                    texto_formula = "\n".join(lineas_txt)
+                    st.download_button(
+                        "⬇ Descargar (.txt)", texto_formula.encode("utf-8"),
+                        file_name=f"{cab[1]}_v{cab[3]}.txt", mime="text/plain")
+                    st.markdown(texto_formula)
+
+                with st.expander("📄 Duplicar esta fórmula"):
+                    c1, c2 = st.columns(2)
+                    nuevo_cod = c1.text_input("Nuevo código", value=f"{cab[1]}-copia")
+                    nuevo_nombre = c2.text_input("Nuevo nombre", value=f"{cab[2]} (copia)")
+                    if st.button("Duplicar"):
+                        nid = duplicar_formula(fid, nuevo_cod, nuevo_nombre)
+                        if nid:
+                            st.success("✔ Fórmula duplicada.")
+                            st.rerun()
+                        else:
+                            st.error("No se pudo duplicar.")
+
+                if st.button("🗑️ Eliminar esta fórmula"):
+                    if eliminar_formula(fid):
+                        st.success("✔ Eliminada.")
+                        st.rerun()
+        else:
+            st.info("No hay fórmulas en la biblioteca.")
+
+    with tab2:
+        st.markdown("### ➕ Crear / editar fórmula")
+        formulas_activas = listar_formulas(solo_activas=True)
+        opciones_vers = [f"{f[0]} · {f[1]} · {f[2]} v{f[3]}" for f in formulas_activas]
+
+        modo = st.radio("¿Qué quieres hacer?",
+                        ["🆕 Crear fórmula nueva", "🆙 Nueva versión de existente"],
+                        horizontal=True)
+        es_version = modo.startswith("🆙")
+
+        fid_base = None
+        v_cod = ""
+        v_nom = ""
+        v_proc = ""
+        v_par = ""
+        v_obs = ""
+        df_ing_default = pd.DataFrame(
+            columns=["Ingrediente", "Código", "Eco", "%", "Cantidad", "Unidad", "Función"])
+
+        if es_version:
+            if opciones_vers:
+                sel_vers = st.selectbox("Fórmula base", opciones_vers)
+                fid_base = int(sel_vers.split(" · ")[0])
+                cab, ings = obtener_formula(fid_base)
+                if cab:
+                    v_cod = cab[1]
+                    v_nom = cab[2]
+                    v_proc = cab[7] or ""
+                    v_par = cab[8] or ""
+                    v_obs = cab[9] or ""
+                    df_ing_default = pd.DataFrame(
+                        [[i[0], i[1], bool(i[2]), i[3], i[4], i[5], i[6]] for i in ings],
+                        columns=["Ingrediente", "Código", "Eco", "%", "Cantidad", "Unidad", "Función"])
+            else:
+                st.info("No hay fórmulas activas para versionar.")
+        else:
+            st.info("La fórmula se guarda como documento independiente del inventario.")
+
+        k = f"v{fid_base}" if es_version and fid_base else "nueva"
+
+        c1, c2 = st.columns(2)
+        cod = c1.text_input("Código / referencia *", value=v_cod,
+                            disabled=es_version, key=f"cod_{k}")
+        nom = c2.text_input("Nombre del producto *", value=v_nom, key=f"nom_{k}")
+
+        proc = st.text_area("Procedimiento de fabricación", value=v_proc, height=160,
+                            key=f"proc_{k}",
+                            placeholder="Pasos, temperaturas, tiempos, velocidades de agitación...")
+        par = st.text_area("Parámetros técnicos / instrucciones", value=v_par, height=120,
+                           key=f"par_{k}",
+                           placeholder="Ej: calentar a 75 °C, agitar 20 min a 300 rpm, envasar a 40 °C...")
+        obs = st.text_area("Observaciones", value=v_obs, key=f"obs_{k}")
+
+        st.markdown("#### Ingredientes / componentes")
+        st.caption("Añade y elimina filas como en Excel. Los ingredientes se guardan "
+                   "como texto libre, sin vincular al inventario.")
+        df_ing = st.data_editor(
+            df_ing_default,
+            num_rows="dynamic",
+            column_config={
+                "Ingrediente": st.column_config.TextColumn("Ingrediente", required=True),
+                "Código": st.column_config.TextColumn("Código MP"),
+                "Eco": st.column_config.CheckboxColumn("Ecológico"),
+                "%": st.column_config.NumberColumn("%", min_value=0.0, max_value=100.0, step=0.1),
+                "Cantidad": st.column_config.NumberColumn("Cantidad", min_value=0.0, step=0.01),
+                "Unidad": st.column_config.SelectboxColumn("Unidad", options=["kg", "g", "L", "mL", "ud", "%"]),
+                "Función": st.column_config.TextColumn("Función"),
+            },
+            key=f"editor_ing_{k}",
+            use_container_width=True,
+        )
+
+        doc = st.file_uploader("Documento adjunto (opcional)", key=f"doc_{k}")
+
+        if st.button("💾 Guardar fórmula", type="primary", key=f"guardar_{k}"):
+            ingredientes = []
+            for _, r in df_ing.iterrows():
+                ing = str(r["Ingrediente"] or "").strip()
+                if not ing:
+                    continue
+                ingredientes.append({
+                    "ingrediente": ing,
+                    "codigo": str(r["Código"] or "").strip(),
+                    "ecologico": 1 if r["Eco"] else 0,
+                    "porcentaje": float(r["%"]) if pd.notna(r["%"]) else 0,
+                    "cantidad": float(r["Cantidad"]) if pd.notna(r["Cantidad"]) else 0,
+                    "unidad": str(r["Unidad"] or "").strip(),
+                    "funcion": str(r["Función"] or "").strip(),
+                })
+            doc_b64 = None
+            doc_nombre = None
+            if doc is not None:
+                doc_b64 = base64.b64encode(doc.getvalue()).decode()
+                doc_nombre = doc.name
+
+            if not cod or not nom:
+                st.error("Código y nombre son obligatorios.")
+            elif not ingredientes:
+                st.error("Añade al menos un ingrediente.")
+            else:
+                if es_version and fid_base:
+                    nuevo_id = nueva_version_formula(cod, ingredientes, proc, par,
+                                                     obs, doc_nombre, doc_b64)
+                    if nuevo_id:
+                        st.success("✔ Nueva versión guardada.")
+                        st.rerun()
+                    else:
+                        st.error("No se pudo guardar la nueva versión.")
+                else:
+                    nuevo_id = crear_formula(cod, nom, ingredientes, proc, par, obs,
+                                             doc_nombre, doc_b64, user["usuario"])
+                    if nuevo_id:
+                        st.success("✔ Fórmula creada en la biblioteca.")
+                        st.rerun()
+                    else:
+                        st.error("No se pudo crear la fórmula.")
+
+    with tab3:
+        st.markdown("### 📥 Importar fórmulas desde Excel / CSV")
+        st.caption("Cada fila = una línea de fórmula. Columnas separadas por "
+                   "tabulador o ';': **código fórmula · nombre fórmula · ingrediente · "
+                   "código MP · %** (opcional: cantidad, unidad, función).")
+        st.code("codigo_formula\tnombre_formula\tingrediente\tcodigo_mp\t%",
+                language=None)
+
+        texto = st.text_area(
+            "Pegar aquí", height=180,
+            placeholder="CR-001\tCrema corporal\tAceite de oliva ozonizado\tMP-001\t30\n"
+                        "CR-001\tCrema corporal\tManteca de karité\tMP-040\t10\n"
+                        "CR-002\tGel\tAgua desionizada\tMP-047\t80")
+        subir = st.file_uploader("O sube un CSV", type=["csv", "txt"])
+        if st.button("📥 Importar fórmulas"):
+            lineas = []
+            if subir is not None:
+                try:
+                    lineas = subir.read().decode("utf-8-sig").splitlines()
+                except Exception as e:
+                    st.error(f"Error leyendo el archivo: {e}")
+            elif texto.strip():
+                lineas = texto.splitlines()
+
+            items = []
+            for linea in lineas:
+                p = [x.strip() for x in linea.replace(";", "\t").split("\t")]
+                if len(p) < 4:
+                    continue
+                items.append({
+                    "formula_codigo": p[0],
+                    "formula_nombre": p[1],
+                    "ingrediente": p[2],
+                    "codigo": p[3],
+                    "porcentaje": p[4] if len(p) > 4 else 0,
+                    "cantidad": p[5] if len(p) > 5 else 0,
+                    "unidad": p[6] if len(p) > 6 else "",
+                    "funcion": p[7] if len(p) > 7 else "",
+                    "ecologico": p[8] if len(p) > 8 else "",
+                })
+            if not items:
+                st.warning("No se detectaron filas. Revisa el formato.")
+            else:
+                creadas, rechazadas = importar_formulas(items)
+                st.success(f"✔ {creadas} fórmulas creadas · {rechazadas} rechazadas.")
+                st.rerun()
+
+
+# =========================================================
+# 🧪 HOJAS DE FABRICACIÓN
+# =========================================================
+elif seccion == "🧪 Hojas de fabricación":
+    st.title("🧪 Hojas de fabricación")
+    st.caption("Aquí se vincula la fórmula con las materias primas reales y sus "
+               "lotes en el momento de fabricar.")
+
+    tab1, tab2 = st.tabs(["🧪 Nueva hoja de fabricación", "📋 Hojas registradas"])
+
+    with tab1:
+        formulas_activas = listar_formulas(solo_activas=True)
+        if not formulas_activas:
+            st.info("Primero crea una fórmula en la biblioteca.")
+        else:
+            opciones_f = [f"{f[0]} · {f[1]} · {f[2]} v{f[3]}" for f in formulas_activas]
+            sel_f = st.selectbox("Fórmula", opciones_f)
+            fid = int(sel_f.split(" · ")[0])
+
+            conn = conectar()
+            prods = conn.execute("SELECT codigo, nombre FROM productos ORDER BY nombre").fetchall()
+            conn.close()
+            opciones_prod = [f"{c} · {n}" for c, n in prods]
+
+            c1, c2 = st.columns(2)
+            sel_prod = c1.selectbox("Producto terminado (opcional)",
+                                    ["(sin producto)"] + opciones_prod)
+            lote_pt = c2.text_input("Lote del producto terminado",
+                                    value=f"PT-{datetime.now().strftime('%Y%m%d%H%M%S')}")
+            c3, c4 = st.columns(2)
+            cantidad_objetivo = c3.number_input("Cantidad a fabricar *", min_value=0.0, step=1.0)
+            unidad_objetivo = c4.selectbox("Unidad objetivo", ["kg", "g", "L", "mL", "ud"])
+            fecha = c3.date_input("Fecha de fabricación", value=date.today())
+            observaciones = c4.text_input("Observaciones")
+
+            if cantidad_objetivo > 0:
+                calc = calcular_cantidades_formula(fid, cantidad_objetivo)
+                if calc:
+                    st.markdown("### 🧪 Cantidades teóricas calculadas")
+                    df_calc = pd.DataFrame(
+                        [[c["ingrediente"], c["codigo"], "🌿" if c.get("ecologico") else "",
+                          c["porcentaje"], f"{c['cantidad_teorica']:.3f}", c["unidad"], c["funcion"]]
+                         for c in calc],
+                        columns=["Ingrediente", "Código", "Eco", "%", "Cantidad teórica", "Unidad", "Función"])
+                    st.dataframe(df_calc, use_container_width=True)
+
+                    if st.button("📝 Generar hoja de fabricación", type="primary"):
+                        prod_cod = ""
+                        prod_nom = ""
+                        if sel_prod != "(sin producto)":
+                            prod_cod = sel_prod.split(" · ")[0]
+                            prod_nom = sel_prod.split(" · ")[1]
+                        num, err = crear_hoja_fabricacion(
+                            fid, prod_cod, prod_nom, lote_pt, cantidad_objetivo,
+                            unidad_objetivo, str(fecha), observaciones, user["usuario"])
+                        if num:
+                            st.success(f"✔ Hoja {num} creada (borrador).")
+                            st.rerun()
+                        else:
+                            st.error(err or "No se pudo crear la hoja.")
+
+    with tab2:
+        st.markdown("### 📋 Hojas de fabricación")
+        hojas = listar_hojas_fabricacion()
+        if not hojas:
+            st.info("Sin hojas de fabricación.")
+        else:
+            df_h = pd.DataFrame(
+                [[h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8],
+                  fmt_fecha(h[9]), h[10], h[11]] for h in hojas],
+                columns=["Número", "Fórmula", "Nombre fórmula", "Versión",
+                         "Producto", "Nombre PT", "Lote PT", "Cantidad", "Ud",
+                         "Fecha", "Estado", "Obs"])
+            st.dataframe(df_h, use_container_width=True)
+
+            sel_h = st.selectbox("Hoja", [f"{h[0]} · {h[2]} · {h[6]}" for h in hojas])
+            num_hoja = sel_h.split(" · ")[0]
+            lineas = lineas_hoja(num_hoja)
+            hoja_info = next((h for h in hojas if h[0] == num_hoja), None)
+            estado = hoja_info[10] if hoja_info else ""
+
+            if lineas:
+                st.markdown(f"### Líneas de la hoja {num_hoja}")
+                if estado == "confirmada":
+                    st.success("✔ Hoja confirmada. Stock ya descontado.")
+                    df_l = pd.DataFrame(
+                        [[l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8]] for l in lineas],
+                        columns=["Ingrediente", "%", "Teórica", "Ud", "MP",
+                                 "Lote", "Real", "Ud real"])
+                    st.dataframe(df_l, use_container_width=True)
+                else:
+                    st.info("Asigna materia prima, lote y cantidad real a cada "
+                            "ingrediente y luego confirma la fabricación.")
+                    conn = conectar()
+                    mps = conn.execute(
+                        "SELECT DISTINCT codigo, nombre FROM materias_primas ORDER BY nombre"
+                    ).fetchall()
+                    conn.close()
+                    opciones_mp = [f"{c} · {n}" for c, n in mps]
+
+                    asignaciones = []
+                    for l in lineas:
+                        lid, ing, pct, teorica, uni, mp_cod, mp_lote, real, uni_real = l
+                        st.markdown(f"**{ing}** — teórica {teorica:.3f} {uni or '—'}")
+                        cc1, cc2, cc3 = st.columns(3)
+                        idx_mp = 0
+                        if mp_cod:
+                            for i, o in enumerate(opciones_mp):
+                                if o.startswith(mp_cod + " · "):
+                                    idx_mp = i + 1
+                                    break
+                        mp_sel = cc1.selectbox(
+                            "Materia prima", ["(sin asignar)"] + opciones_mp,
+                            index=idx_mp, key=f"hmp_{num_hoja}_{lid}")
+                        lote_opts = []
+                        if mp_sel != "(sin asignar)":
+                            mp_cod_sel = mp_sel.split(" · ")[0]
+                            conn = conectar()
+                            lotes = conn.execute(
+                                "SELECT lote, cantidad, unidad FROM materias_primas "
+                                "WHERE codigo = ? AND cantidad > 0",
+                                (mp_cod_sel,)).fetchall()
+                            conn.close()
+                            lote_opts = [f"{lo[0]} ({lo[1]:.3f} {lo[2]})" for lo in lotes]
+                        lote_sel = cc2.selectbox("Lote", ["(seleccionar)"] + lote_opts,
+                                                 key=f"hlote_{num_hoja}_{lid}")
+                        cant_real = cc3.number_input(
+                            "Cantidad real usada", min_value=0.0,
+                            value=float(teorica or 0), key=f"hreal_{num_hoja}_{lid}")
+                        asignaciones.append((lid, mp_sel, lote_sel, cant_real, uni))
+
+                    if st.button("✅ Confirmar fabricación", type="primary"):
+                        lineas_conf = []
+                        errores = []
+                        for lid, mp_sel, lote_sel, cant_real, uni in asignaciones:
+                            if mp_sel == "(sin asignar)":
+                                errores.append(f"Línea {lid}: asigna una materia prima.")
+                                continue
+                            if lote_sel == "(seleccionar)":
+                                errores.append(f"Línea {lid}: selecciona un lote.")
+                                continue
+                            mp_cod = mp_sel.split(" · ")[0]
+                            lote_real = lote_sel.split(" (")[0]
+                            lineas_conf.append({"id": lid, "materia_codigo": mp_cod,
+                                                "materia_lote": lote_real,
+                                                "cantidad_real": cant_real,
+                                                "unidad_real": uni})
+                        if errores:
+                            for e in errores:
+                                st.error(e)
+                        else:
+                            ok, msg = confirmar_hoja_fabricacion(num_hoja, lineas_conf)
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
 
 
 # =========================================================
@@ -785,10 +1457,11 @@ elif seccion == "📋 Pedidos de producción":
             ["(todos)", "planificado", "en_preparacion", "en_curso", "finalizado", "cancelado"],
         )
         filas = listar_ordenes(None if est == "(todos)" else est)
-        df_op = df(filas, [
-            "Nº pedido", "Código", "Producto", "Planif.", "Fabricado",
-            "Estado", "Creado", "Previsto", "Iniciado",
-        ])
+        df_op = pd.DataFrame(
+            [[f[0], f[1], f[2], f[3], f[4], f[5], fmt_fecha(f[6]),
+              fmt_fecha(f[7]), fmt_fecha(f[8])] for f in filas],
+            columns=["Nº pedido", "Código", "Producto", "Planif.", "Fabricado",
+                     "Estado", "Creado", "Previsto", "Iniciado"])
         st.dataframe(df_op, use_container_width=True)
 
     with tab3:
@@ -830,8 +1503,9 @@ elif seccion == "📋 Pedidos de producción":
                 st.markdown("#### 🔒 Reservas activas")
                 res = reservas_de_pedido(numero_sel)
                 if res:
-                    df_res = pd.DataFrame(res, columns=["Tipo", "Código", "Cantidad",
-                                                          "Ud", "Estado", "Fecha"])
+                    df_res = pd.DataFrame(
+                        [[f[0], f[1], f[2], f[3], f[4], fmt_fecha(f[5])] for f in res],
+                        columns=["Tipo", "Código", "Cantidad", "Ud", "Estado", "Fecha"])
                     st.dataframe(df_res, use_container_width=True)
 
             st.markdown("---")
@@ -865,9 +1539,10 @@ elif seccion == "📋 Pedidos de producción":
             res = reservas_de_pedido(num)
             if res:
                 st.markdown("**Reservas:**")
-                st.dataframe(pd.DataFrame(res, columns=["Tipo", "Código", "Cantidad",
-                                                          "Ud", "Estado", "Fecha"]),
-                             use_container_width=True)
+                st.dataframe(pd.DataFrame(
+                    [[f[0], f[1], f[2], f[3], f[4], fmt_fecha(f[5])] for f in res],
+                    columns=["Tipo", "Código", "Cantidad", "Ud", "Estado", "Fecha"]),
+                    use_container_width=True)
 
     with tab6:
         st.markdown("### 📄 Generar hoja de pesada")
@@ -961,7 +1636,9 @@ elif seccion == "🚚 Proveedores":
         cod = st.text_input("Código artículo")
         if cod:
             filas = comparar_precios(cod)
-            df_c = df(filas, ["Proveedor", "Precio €", "Fecha"])
+            df_c = pd.DataFrame(
+                [[f[0], f[1], fmt_fecha(f[2])] for f in filas],
+                columns=["Proveedor", "Precio €", "Fecha"])
             st.dataframe(df_c, use_container_width=True)
 
 
@@ -1050,14 +1727,18 @@ elif seccion == "📈 Histórico y exportación":
             str(desde) if desde else None,
             str(hasta) if hasta else None,
         )
-        df_h = df(filas, ["ID", "Código", "Producto", "Lote", "Cantidad", "Fecha", "Coste"])
+        df_h = pd.DataFrame(
+            [[f[0], f[1], f[2], f[3], f[4], fmt_fecha(f[5]), f[6]] for f in filas],
+            columns=["ID", "Código", "Producto", "Lote", "Cantidad", "Fecha", "Coste"])
         st.dataframe(df_h, use_container_width=True)
         if not df_h.empty:
             st.bar_chart(df_h.set_index("Producto")["Cantidad"])
 
     with tab2:
         filas = listar_movimientos(200)
-        df_m = df(filas, ["Fecha", "Tipo art.", "Código", "Lote", "Movimiento", "Cant.", "Ud", "Ref."])
+        df_m = pd.DataFrame(
+            [[fmt_fecha(f[0]), f[1], f[2], f[3], f[4], f[5], f[6], f[7]] for f in filas],
+            columns=["Fecha", "Tipo art.", "Código", "Lote", "Movimiento", "Cant.", "Ud", "Ref."])
         st.dataframe(df_m, use_container_width=True)
 
     with tab3:
@@ -1133,8 +1814,11 @@ elif seccion == "✅ Control de calidad":
     with tab2:
         tipo = st.selectbox("Tipo", ["(todos)", "MP", "PT"])
         filas = ver_controles_calidad(None if tipo == "(todos)" else tipo)
-        df_c = df(filas, ["ID", "Tipo", "Código", "Lote", "Fecha", "Parámetro",
-                            "Valor", "Esperado", "Resultado", "Resp."])
+        df_c = pd.DataFrame(
+            [[f[0], f[1], f[2], f[3], fmt_fecha(f[4]), f[5], f[6], f[7], f[8], f[9]]
+             for f in filas],
+            columns=["ID", "Tipo", "Código", "Lote", "Fecha", "Parámetro",
+                     "Valor", "Esperado", "Resultado", "Resp."])
         st.dataframe(df_c, use_container_width=True)
 
     with tab3:
@@ -1153,8 +1837,10 @@ elif seccion == "✅ Control de calidad":
     with tab4:
         est = st.selectbox("Estado", ["(todas)", "abierta", "en_proceso", "cerrada"])
         filas = listar_no_conformidades(None if est == "(todas)" else est)
-        df_nc = df(filas, ["ID", "Fecha", "Tipo", "Código", "Lote", "Descripción",
-                             "Gravedad", "Estado"])
+        df_nc = pd.DataFrame(
+            [[f[0], fmt_fecha(f[1]), f[2], f[3], f[4], f[5], f[6], f[7]] for f in filas],
+            columns=["ID", "Fecha", "Tipo", "Código", "Lote", "Descripción",
+                     "Gravedad", "Estado"])
         st.dataframe(df_nc, use_container_width=True)
         nc_id = st.number_input("ID NC a cerrar", min_value=0, step=1)
         acc = st.text_input("Acción correctiva")
@@ -1232,6 +1918,7 @@ elif seccion == "📊 Análisis y gráficos":
     if not df_ev.empty:
         fig = px.line(df_ev, x="fecha", y="coste_unitario", color="producto",
                       markers=True, color_discrete_sequence=px.colors.qualitative.Purple)
+        fig.update_xaxes(tickformat="%d/%m/%Y")
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### 🌿 Consumo de MP por mes")
@@ -1316,9 +2003,11 @@ elif seccion == "⚖️ Pesos reales":
         c4.metric("%", f"{res['desviacion_pct']:+.2f}%")
         filas = pesos_de_pedido(sel)
         if filas:
-            df_p = pd.DataFrame(filas, columns=["Tipo", "Artículo", "Lote", "Teórico",
-                                                  "Real", "Ud", "Desv.", "%", "Operario",
-                                                  "Fecha", "Notas"])
+            df_p = pd.DataFrame(
+                [[f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8],
+                  fmt_fecha(f[9]), f[10]] for f in filas],
+                columns=["Tipo", "Artículo", "Lote", "Teórico", "Real", "Ud",
+                         "Desv.", "%", "Operario", "Fecha", "Notas"])
             st.dataframe(df_p, use_container_width=True)
 
 
@@ -1378,9 +2067,11 @@ elif seccion == "📉 Mermas":
         pedido = st.text_input("Filtrar por pedido (vacío=todos)")
         tipo = st.selectbox("Filtrar por tipo", ["(todos)", "merma", "subproducto", "pérdida"])
         filas = listar_mermas(pedido or None, None if tipo == "(todos)" else tipo)
-        df_m = pd.DataFrame(filas, columns=["ID", "Pedido", "Producto", "Tipo", "Motivo",
-                                              "Artículo", "Lote", "Cantidad", "Ud", "Coste €",
-                                              "Fecha", "Responsable"])
+        df_m = pd.DataFrame(
+            [[f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9],
+              fmt_fecha(f[10]), f[11]] for f in filas],
+            columns=["ID", "Pedido", "Producto", "Tipo", "Motivo", "Artículo",
+                     "Lote", "Cantidad", "Ud", "Coste €", "Fecha", "Responsable"])
         st.dataframe(df_m, use_container_width=True)
 
     with tab4:
@@ -1442,8 +2133,10 @@ elif seccion == "📈 Rendimiento":
         prod = st.text_input("Filtrar por producto")
         filas = historico_rendimiento(prod or None)
         if filas:
-            df_h = pd.DataFrame(filas, columns=["Lote", "Producto", "Teórico", "Real",
-                                                  "Ud", "Rendimiento %", "Fecha"])
+            df_h = pd.DataFrame(
+                [[f[0], f[1], f[2], f[3], f[4], f[5], fmt_fecha(f[6])] for f in filas],
+                columns=["Lote", "Producto", "Teórico", "Real", "Ud",
+                         "Rendimiento %", "Fecha"])
             st.dataframe(df_h, use_container_width=True)
 
     with tab3:
@@ -1484,9 +2177,12 @@ elif seccion == "🔄 Reprocesos":
     with tab2:
         est = st.selectbox("Estado", ["(todos)", "abierto", "en_proceso", "cerrado", "descartado"])
         filas = listar_reprocesos(None if est == "(todos)" else est)
-        df_r = df(filas, ["Número", "Lote origen", "Producto", "Cantidad", "Motivo",
-                            "Estado", "Lote destino", "Apertura", "Cierre",
-                            "Resultado", "Coste extra"])
+        df_r = pd.DataFrame(
+            [[f[0], f[1], f[2], f[3], f[4], f[5], f[6], fmt_fecha(f[7]),
+              fmt_fecha(f[8]), f[9], f[10]] for f in filas],
+            columns=["Número", "Lote origen", "Producto", "Cantidad", "Motivo",
+                     "Estado", "Lote destino", "Apertura", "Cierre",
+                     "Resultado", "Coste extra"])
         st.dataframe(df_r, use_container_width=True)
 
     with tab3:
@@ -1564,8 +2260,11 @@ elif seccion == "🛒 Órdenes de compra":
                                                 "confirmada", "recibida_parcial",
                                                 "recibida", "cancelada"])
         filas = listar_ordenes_compra(None if est == "(todas)" else est)
-        df_oc = df(filas, ["Número", "Proveedor", "Estado", "Creada",
-                             "Prevista", "Recibida", "Total €"])
+        df_oc = pd.DataFrame(
+            [[f[0], f[1], f[2], fmt_fecha(f[3]), fmt_fecha(f[4]),
+              fmt_fecha(f[5]), f[6]] for f in filas],
+            columns=["Número", "Proveedor", "Estado", "Creada",
+                     "Prevista", "Recibida", "Total €"])
         st.dataframe(df_oc, use_container_width=True)
 
     with tab3:
@@ -1595,115 +2294,275 @@ elif seccion == "🛒 Órdenes de compra":
 # 📥 RECEPCIÓN (versión ampliada)
 # =========================================================
 elif seccion == "📥 Recepción de mercancía":
-    from recepcion import (crear_recepcion_directa,
-                           listar_recepciones_directas)
-    st.title("📥 Recepción de mercancía")
-    tab1, tab2 = st.tabs(["➕ Nueva entrada", "📋 Listado"])
+    st.title("📥 Recepción de materias primas")
+    st.caption("Registra la entrada de materia prima. La cantidad se suma "
+               "automáticamente al stock y queda en el historial.")
+    tab1, tab2 = st.tabs(["➕ Registrar entrada", "📜 Historial de entradas"])
 
     with tab1:
-        with st.form("form_recepcion_directa"):
+        conn = conectar()
+        cat = conn.execute("SELECT codigo, nombre FROM catalogo_mp").fetchall()
+        mp = conn.execute("SELECT DISTINCT codigo, nombre FROM materias_primas").fetchall()
+        conn.close()
+        mp_existentes = list(dict.fromkeys(cat + mp))
+
+        with st.form("form_recepcion_mp"):
+            sel_mp = st.selectbox(
+                "Materia prima existente (opcional)",
+                ["(nueva materia prima)"] + [f"{c} · {n}" for c, n in mp_existentes])
             c1, c2 = st.columns(2)
-            fecha_entrada = c1.date_input("Fecha de entrada",
-                                          value=date.today())
-            producto = c2.text_input("Producto *")
-            lote = c1.text_input("Lote *")
-            proveedor = c2.text_input("Proveedor")
-            uso = c1.selectbox("Uso", ["cosmetico", "alimentario", "ambos"])
-            conforme = c2.selectbox("Conformidad",
-                                    ["conforme", "no_conforme"])
-            bio = c1.checkbox("Bio")
-            caducidad_bio = c2.date_input("Caducidad certificado bio",
-                                           value=None)
-            responsable = c1.text_input("Responsable")
+            if sel_mp == "(nueva materia prima)":
+                codigo = c1.text_input("Código *")
+                nombre = c2.text_input("Nombre *")
+            else:
+                codigo = c1.text_input("Código *", value=sel_mp.split(" · ")[0], disabled=True)
+                nombre = c2.text_input("Nombre *", value=sel_mp.split(" · ")[1])
+
+            c3, c4 = st.columns(2)
+            fecha = c3.date_input("Fecha de entrada", value=date.today())
+            proveedor = c4.text_input("Proveedor")
+            c5, c6 = st.columns(2)
+            uso = c5.selectbox("Uso", ["cosmetico", "alimentario", "ambos"])
+            lote_proveedor = c6.text_input("Nº de lote del proveedor")
+            c7, c8 = st.columns(2)
+            lote_interno = c7.text_input("Lote interno (vacío = auto)")
+            cantidad = c8.number_input("Cantidad recibida *", min_value=0.0, step=0.1)
+            c9, c10 = st.columns(2)
+            unidad = c9.selectbox("Unidad *", ["kg", "g", "L", "mL", "ud"])
+            fcad = c10.date_input("Fecha de caducidad / consumo preferente", value=None)
+            doc_tipo = st.selectbox(
+                "Documentación asociada",
+                ["(sin documento)", "Ficha técnica", "Certificado ecológico",
+                 "Certificado de análisis", "Otro"])
+            doc = st.file_uploader("Subir documento (PDF / imagen)")
             observaciones = st.text_area("Observaciones")
 
-            if st.form_submit_button("Guardar entrada"):
-                if not producto or not lote:
-                    st.error("Producto y lote son obligatorios.")
+            if st.form_submit_button("💾 Guardar entrada"):
+                if not codigo or not nombre or cantidad <= 0:
+                    st.error("Código, nombre y cantidad son obligatorios.")
                 else:
-                    num = crear_recepcion_directa(
-                        producto, lote, proveedor,
-                        str(fecha_entrada), uso, conforme, bio,
-                        str(caducidad_bio) if caducidad_bio else None,
-                        responsable, observaciones,
-                    )
-                    st.success(f"✔ Entrada {num} registrada.")
-                    st.rerun()
+                    lote_final = lote_interno or f"{codigo}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                    doc_b64 = None
+                    doc_nombre = None
+                    if doc is not None:
+                        doc_b64 = base64.b64encode(doc.getvalue()).decode()
+                        doc_nombre = doc.name
+                    ok = registrar_entrada_mp(
+                        str(fecha), codigo, nombre, lote_final,
+                        lote_proveedor, proveedor, uso, cantidad, unidad,
+                        str(fcad) if fcad else None,
+                        doc_nombre, doc_b64,
+                        None if doc_tipo == "(sin documento)" else doc_tipo,
+                        observaciones, user["usuario"])
+                    if ok:
+                        st.success(f"✔ Entrada registrada. Stock de {codigo} actualizado.")
+                        st.rerun()
+                    else:
+                        st.error("No se pudo registrar la entrada.")
 
     with tab2:
-        filas = listar_recepciones_directas()
-        df_r = df(filas, ["Número", "Fecha", "Producto", "Proveedor",
-                          "Uso", "Conformidad", "Bio", "Caduc. bio",
-                          "Responsable", "Observaciones"])
-        st.dataframe(df_r, use_container_width=True)
-        descargar_df(df_r, "recepciones.csv")
+        st.markdown("### 📜 Historial de entradas")
+        filas_ent = listar_entradas_mp()
+        if filas_ent:
+            df_ent = pd.DataFrame(
+                [[fmt_fecha(f[1]), f[2], f[3], f[4], f[5], f[6], f[7],
+                  f[8], f[9], fmt_fecha(f[10]), f[11], f[12], f[13], f[14]]
+                 for f in filas_ent],
+                columns=["Fecha", "Código", "Nombre", "Lote", "Lote prov.",
+                         "Proveedor", "Uso", "Cantidad", "Ud", "Caducidad",
+                         "Documento", "Tipo doc", "Observaciones", "Usuario"])
+            st.dataframe(df_ent, use_container_width=True)
+            descargar_df(df_ent, "entradas_mp.csv")
+
+            st.markdown("### 📎 Descargar documento de una entrada")
+            ent_con_doc = [f for f in filas_ent if f[11]]
+            if ent_con_doc:
+                sel_ent = st.selectbox(
+                    "Entrada",
+                    [f"#{f[0]} · {f[2]} · {f[3]} ({f[11]})" for f in ent_con_doc])
+                ent_id = int(sel_ent.split(" · ")[0].lstrip("#"))
+                nom_doc, b64_doc = obtener_documento_entrada(ent_id)
+                if nom_doc and b64_doc:
+                    try:
+                        st.download_button("⬇ Descargar documento",
+                                           base64.b64decode(b64_doc),
+                                           file_name=nom_doc)
+                    except Exception:
+                        st.warning("No se pudo decodificar el documento.")
+        else:
+            st.info("Sin entradas registradas.")
+
+        st.markdown("### 📦 Resumen por lote (recibido vs restante)")
+        filas_res = resumen_lotes_mp()
+        if filas_res:
+            df_res = pd.DataFrame(
+                [[f[0], f[1], f[7], f[2], f[3], f[4], fmt_fecha(f[5]),
+                  fmt_fecha(f[6])] for f in filas_res],
+                columns=["Código", "Lote", "Recibido", "Restante", "Ud",
+                         "Proveedor", "Fecha recepción", "Caducidad"])
+            st.dataframe(df_res, use_container_width=True)
+            descargar_df(df_res, "resumen_lotes_mp.csv")
 
 
 # =========================================================
 # 📤 SALIDAS
 # =========================================================
 elif seccion == "📤 Salidas":
-    from recepcion import crear_salida, listar_salidas
-    st.title("📤 Salidas de producto")
-    tab1, tab2 = st.tabs(["➕ Nueva salida", "📋 Listado"])
+    st.title("📤 Salidas y expediciones")
+    tab1, tab2, tab3 = st.tabs(["➕ Nueva salida", "📅 Por fecha", "📋 Todo el histórico"])
 
     with tab1:
+        st.markdown("### 1️⃣ Fecha de la salida")
+        fecha = st.date_input("Fecha de salida", value=date.today())
+
+        st.markdown("### 2️⃣ Destino")
+        c1, c2 = st.columns(2)
+        destino = c1.text_input("Destino *")
+        cliente = c2.text_input("Cliente / destinatario")
+        pedido = c1.text_input("Nº de pedido o factura")
+        observaciones = st.text_area("Observaciones")
+
+        st.markdown("### 3️⃣ Productos que salen (uno o varios)")
         conn = conectar()
-        productos = conn.execute(
+        prods = conn.execute(
             "SELECT codigo, nombre FROM productos ORDER BY nombre"
         ).fetchall()
+        lotes_pt = conn.execute("""
+            SELECT p.codigo, s.lote, s.cantidad
+            FROM stock_producto s JOIN productos p ON p.id = s.producto_id
+            WHERE s.cantidad > 0
+            ORDER BY p.nombre, s.lote
+        """).fetchall()
         conn.close()
 
-        if productos:
-            opciones = [f"{c} · {n}" for c, n in productos]
-            sel = st.selectbox("Producto", opciones)
-            prod_cod = sel.split(" · ")[0]
-            prod_nom = sel.split(" · ")[1]
-        else:
-            st.info("No hay productos. Añádelos en Productos y fórmulas.")
-            prod_cod = ""
-            prod_nom = st.text_input("Producto")
+        opciones_prod = [f"{c} · {n}" for c, n in prods]
 
-        with st.form("form_salida"):
-            c1, c2 = st.columns(2)
-            uso = c1.selectbox("Uso", ["cosmetico", "alimentario", "ambos"])
-            destino = c2.text_input("Destino *")
-            lote = c1.text_input("Lote *")
-            cantidad = c2.number_input("Cantidad", min_value=0.0, step=0.1)
-            unidad = c1.selectbox("Unidad", ["ud", "kg", "g", "L", "mL"])
-            responsable = c2.text_input("Responsable")
-            comentarios = st.text_area(
-                "Comentarios",
-                placeholder="Ej: envío de aceite a Natural Solter "
-                            "para producción de crema J",
-            )
-            if st.form_submit_button("Registrar salida"):
-                if not prod_nom or not destino or not lote:
-                    st.error("Producto, destino y lote son obligatorios.")
+        if not opciones_prod:
+            st.info("No hay productos con stock. Añade stock o fabrica primero.")
+            st.stop()
+
+        st.caption("Añade las filas que necesites (como en Excel).")
+        lineas_df = st.data_editor(
+            pd.DataFrame(columns=["Producto", "Lote PT", "Cantidad", "Unidad"]),
+            num_rows="dynamic",
+            column_config={
+                "Producto": st.column_config.SelectboxColumn(
+                    "Producto", options=opciones_prod, required=True),
+                "Lote PT": st.column_config.TextColumn("Lote PT", required=True),
+                "Cantidad": st.column_config.NumberColumn(
+                    "Cantidad", min_value=0.0, required=True),
+                "Unidad": st.column_config.SelectboxColumn(
+                    "Unidad", options=["ud", "kg", "g", "L", "mL"], required=True),
+            },
+            use_container_width=True,
+        )
+
+        if st.button("🚚 Registrar salida", type="primary"):
+            lineas = []
+            errores = []
+            for _, r in lineas_df.iterrows():
+                prod = str(r["Producto"] or "").strip()
+                lote = str(r["Lote PT"] or "").strip()
+                cant = float(r["Cantidad"]) if pd.notna(r["Cantidad"]) else 0
+                uni = str(r["Unidad"] or "").strip()
+                if not prod or not lote or cant <= 0:
+                    continue
+                cod = prod.split(" · ")[0]
+                nom = prod.split(" · ")[1]
+                disp = next((l[2] for l in lotes_pt if l[0] == cod and l[1] == lote), None)
+                if disp is None:
+                    errores.append(f"{prod} lote {lote}: sin stock disponible.")
+                elif disp < cant:
+                    errores.append(f"{prod} lote {lote}: stock {disp} < {cant}.")
                 else:
-                    crear_salida(prod_nom, prod_cod, uso, destino, lote,
-                                 cantidad, unidad, comentarios, responsable)
-                    st.success("✔ Salida registrada.")
+                    lineas.append({"producto_codigo": cod, "producto_nombre": nom,
+                                   "lote": lote, "cantidad": cant, "unidad": uni})
+            if not destino:
+                errores.append("El destino es obligatorio.")
+            if not lineas:
+                errores.append("Añade al menos una línea de producto con cantidad.")
+            if errores:
+                for e in errores:
+                    st.error(e)
+            else:
+                try:
+                    num = crear_expedicion(str(fecha), destino, cliente, pedido,
+                                           observaciones, user["usuario"], lineas)
+                    st.success(f"✔ Salida {num} registrada. Stock descontado.")
                     st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
     with tab2:
-        filas = listar_salidas()
-        df_s = df(filas, ["Fecha", "Producto", "Código", "Uso", "Destino",
-                          "Lote", "Cantidad", "Unidad", "Comentarios",
-                          "Responsable"])
-        st.dataframe(df_s, use_container_width=True)
-        descargar_df(df_s, "salidas.csv")
+        st.markdown("### 📅 Salidas organizadas por fecha")
+        filas = listar_expediciones()
+        if not filas:
+            st.info("Sin salidas registradas.")
+        else:
+            fechas = sorted({fmt_fecha(f[1]) for f in filas}, reverse=True)
+            fecha_sel = st.selectbox("Fecha", fechas)
+            exps = [f for f in filas if fmt_fecha(f[1]) == fecha_sel]
+            st.caption(f"{len(exps)} salida(s) el {fecha_sel}")
+            for exp in exps:
+                titulo = f"🚚 {exp[0]} · {exp[2]}"
+                if exp[3]:
+                    titulo += f" · {exp[3]}"
+                with st.expander(titulo):
+                    st.markdown(
+                        f"**Destino:** {exp[2]}  \n"
+                        f"**Cliente:** {exp[3] or '—'}  \n"
+                        f"**Pedido/factura:** {exp[4] or '—'}  \n"
+                        f"**Observaciones:** {exp[5] or '—'}")
+                    lineas = lineas_expedicion(exp[0])
+                    st.dataframe(
+                        pd.DataFrame(lineas, columns=["Código", "Producto", "Lote",
+                                                      "Cantidad", "Unidad"]),
+                        use_container_width=True)
 
-        # Gasto por lote
-        st.markdown("### 🔎 Consumo por lote")
-        if not df_s.empty:
-            lotes = sorted(set(df_s["Lote"].dropna()))
-            lote_sel = st.selectbox("Ver movimientos del lote", ["(todos)"] + lotes)
-            if lote_sel != "(todos)":
-                df_lote = df_s[df_s["Lote"] == lote_sel]
-                st.dataframe(df_lote, use_container_width=True)
-                total = df_lote["Cantidad"].sum()
-                st.metric("Total salido de este lote", f"{total:.2f}")
+    with tab3:
+        st.markdown("### 📋 Todo el histórico de salidas")
+        filas = listar_expediciones()
+        if filas:
+            df_e = pd.DataFrame(
+                [[f[0], fmt_fecha(f[1]), f[2], f[3], f[4], f[5], f[6]]
+                 for f in filas],
+                columns=["Número", "Fecha", "Destino", "Cliente",
+                         "Pedido/Factura", "Observaciones", "Usuario"])
+            st.dataframe(df_e, use_container_width=True)
+            descargar_df(df_e, "expediciones.csv")
+
+            st.markdown("### 🔎 Todas las líneas (filtrar por fecha, destino, cliente, producto o lote)")
+            todas = todas_lineas_expediciones()
+            cfd1, cfd2 = st.columns(2)
+            desde_f = cfd1.date_input("Desde fecha", value=None, key="exp_desde")
+            hasta_f = cfd2.date_input("Hasta fecha", value=None, key="exp_hasta")
+            if desde_f or hasta_f:
+                filtradas = []
+                for f in todas:
+                    fecha_iso = str(f[1])[:10]
+                    if desde_f and fecha_iso < str(desde_f):
+                        continue
+                    if hasta_f and fecha_iso > str(hasta_f):
+                        continue
+                    filtradas.append(f)
+                todas = filtradas
+            df_t = pd.DataFrame(
+                [[f[0], fmt_fecha(f[1]), f[2], f[3], f[4], f[5], f[6], f[7],
+                  f[8], f[9]] for f in todas],
+                columns=["Expedición", "Fecha", "Destino", "Cliente",
+                         "Pedido", "Código", "Producto", "Lote",
+                         "Cantidad", "Unidad"])
+            if not df_t.empty:
+                filtro = st.text_input("Filtrar (texto en cualquier campo)")
+                if filtro:
+                    mask = df_t.apply(
+                        lambda col: col.astype(str).str.contains(
+                            filtro, case=False, na=False)).any(axis=1)
+                    df_t = df_t[mask]
+                st.dataframe(df_t, use_container_width=True)
+                descargar_df(df_t, "lineas_expediciones.csv")
+        else:
+            st.info("Sin expediciones registradas.")
 
 
 # =========================================================
@@ -1783,11 +2642,14 @@ elif seccion == "🫒 Aceites ozonizados":
     # ---------- Listar producciones ----------
     with tab2:
         filas = listar_producciones_ozono()
-        df_pr = df(filas, [
-            "Número", "Fecha", "Inicio", "Fin", "Litros", "Reactor",
-            "Aceite", "Lote", "Proveedor", "Flujo", "Presión",
-            "N₂", "Trampa agua", "Emulsión", "Observaciones",
-            "Responsable"])
+        df_pr = pd.DataFrame(
+            [[f[0], fmt_fecha(f[1]), f[2], f[3], f[4], f[5], f[6], f[7],
+              f[8], f[9], f[10], f[11], f[12], f[13], f[14], f[15]]
+             for f in filas],
+            columns=["Número", "Fecha", "Inicio", "Fin", "Litros", "Reactor",
+                     "Aceite", "Lote", "Proveedor", "Flujo", "Presión",
+                     "N₂", "Trampa agua", "Emulsión", "Observaciones",
+                     "Responsable"])
         st.dataframe(df_pr, use_container_width=True)
         descargar_df(df_pr, "producciones_ozono.csv")
 
@@ -1798,9 +2660,11 @@ elif seccion == "🫒 Aceites ozonizados":
         if not garrafas:
             st.info("No hay garrafas todavía. Crea una producción.")
         else:
-            df_g = df(garrafas, ["Garrafa", "Capacidad (L)", "Disponible (L)",
-                                  "Producción", "Lote", "Producto",
-                                  "Llenado", "Ubicación"])
+            df_g = pd.DataFrame(
+                [[g[0], g[1], g[2], g[3], g[4], g[5], fmt_fecha(g[6]), g[7]]
+                 for g in garrafas],
+                columns=["Garrafa", "Capacidad (L)", "Disponible (L)",
+                         "Producción", "Lote", "Producto", "Llenado", "Ubicación"])
             st.dataframe(df_g, use_container_width=True)
 
             st.markdown("### 🔎 Ver detalle de una garrafa")
@@ -1817,9 +2681,10 @@ elif seccion == "🫒 Aceites ozonizados":
 
                 if salidas:
                     st.markdown("#### En qué se ha gastado este aceite")
-                    df_s = pd.DataFrame(salidas, columns=[
-                        "Fecha", "Litros", "Destino", "Comentarios",
-                        "Responsable"])
+                    df_s = pd.DataFrame(
+                        [[fmt_fecha(s[0]), s[1], s[2], s[3], s[4]] for s in salidas],
+                        columns=["Fecha", "Litros", "Destino", "Comentarios",
+                                 "Responsable"])
                     st.dataframe(df_s, use_container_width=True)
                     total_gastado = sum(s[1] for s in salidas)
                     st.metric("Total gastado de esta garrafa", f"{total_gastado:.2f} L")
@@ -1900,8 +2765,10 @@ elif seccion == "🏷️ Etiquetas":
         if not filas:
             st.info("No hay etiquetas subidas.")
         else:
-            df_e = df(filas, ["ID", "Código", "Producto", "Versión",
-                              "Fichero", "Fecha", "Comentarios"])
+            df_e = pd.DataFrame(
+                [[f[0], f[1], f[2], f[3], f[4], fmt_fecha(f[5]), f[6]] for f in filas],
+                columns=["ID", "Código", "Producto", "Versión", "Fichero",
+                         "Fecha", "Comentarios"])
             st.dataframe(df_e, use_container_width=True)
 
             st.markdown("### ⬇️ Descargar una etiqueta")
@@ -1963,7 +2830,7 @@ elif seccion == "👥 Usuarios":
         st.error("Solo admins.")
         st.stop()
     st.title("👥 Usuarios")
-    tab1, tab2, tab3 = st.tabs(["➕ Crear", "📋 Listar", "🔑 Contraseña"])
+    tab1, tab2, tab3, tab4 = st.tabs(["➕ Crear", "📋 Listar", "🔑 Contraseña", "🗑️ Eliminar"])
     with tab1:
         with st.form("form_user"):
             u = st.text_input("Usuario")
@@ -1977,8 +2844,11 @@ elif seccion == "👥 Usuarios":
                     st.rerun()
     with tab2:
         filas = listar_usuarios()
-        df_u = pd.DataFrame(filas, columns=["Usuario", "Nombre", "Email", "Rol",
-                                              "Activo", "Creado", "Último acceso"])
+        df_u = pd.DataFrame(
+            [[f[0], f[1], f[2], f[3], f[4], fmt_fecha(f[5]), fmt_fecha(f[6])]
+             for f in filas],
+            columns=["Usuario", "Nombre", "Email", "Rol", "Activo", "Creado",
+                     "Último acceso"])
         st.dataframe(df_u, use_container_width=True)
     with tab3:
         with st.form("form_pwd"):
@@ -1988,6 +2858,22 @@ elif seccion == "👥 Usuarios":
                 if usuario_sel and nueva:
                     cambiar_password(usuario_sel, nueva)
                     st.success("✔ Actualizada.")
+    with tab4:
+        filas_del = listar_usuarios()
+        usuarios_disp = [f[0] for f in filas_del]
+        with st.form("form_del_user"):
+            usuario_del = st.selectbox("Usuario a eliminar", usuarios_disp)
+            confirmar = st.text_input("Escribe el usuario para confirmar")
+            if st.form_submit_button("🗑️ Eliminar usuario", type="primary"):
+                if usuario_del == user["usuario"]:
+                    st.error("No puedes eliminar tu propia cuenta desde aquí.")
+                elif confirmar.strip() != usuario_del:
+                    st.error("El texto de confirmación no coincide con el usuario.")
+                elif eliminar_usuario(usuario_del):
+                    st.success(f"✔ Usuario '{usuario_del}' eliminado.")
+                    st.rerun()
+                else:
+                    st.error("No se pudo eliminar el usuario.")
 
 
 # =========================================================
@@ -1999,7 +2885,9 @@ elif seccion == "📜 Auditoría":
         st.stop()
     st.title("📜 Auditoría")
     filas = ver_auditoria(500)
-    df_a = pd.DataFrame(filas, columns=["Fecha", "Usuario", "Acción", "Detalle"])
+    df_a = pd.DataFrame(
+        [[fmt_fecha(f[0]), f[1], f[2], f[3]] for f in filas],
+        columns=["Fecha", "Usuario", "Acción", "Detalle"])
     st.dataframe(df_a, use_container_width=True)
 
 

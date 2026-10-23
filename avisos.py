@@ -5,6 +5,18 @@ from database import conectar
 from datetime import datetime, timedelta
 
 
+def _fmt(valor):
+    """ISO/date → DD/MM/AAAA."""
+    if not valor:
+        return str(valor)
+    s = str(valor).strip()
+    d = s[:10]
+    try:
+        return datetime.strptime(d, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except ValueError:
+        return s
+
+
 def avisos_envases():
     avisos = []
     conn = conectar()
@@ -39,9 +51,9 @@ def avisos_ordenes_pendientes():
             try:
                 f = datetime.fromisoformat(fprev).date()
                 if f < hoy:
-                    avisos.append(f"🔴 Pedido {numero} RETRASADO (previsto {fprev}).")
+                    avisos.append(f"🔴 Pedido {numero} RETRASADO (previsto {_fmt(fprev)}).")
                 elif (f - hoy).days <= 3:
-                    avisos.append(f"📅 Pedido {numero} previsto para {fprev}.")
+                    avisos.append(f"📅 Pedido {numero} previsto para {_fmt(fprev)}.")
             except Exception:
                 pass
     conn.close()
@@ -57,7 +69,7 @@ def avisos_lotes_bloqueados():
         WHERE estado IN ('bloqueado', 'rechazado')
     """).fetchall()
     for t, c, l, f, e in rows:
-        avisos.append(f"🚫 Lote {l} de {c} ({t}) está {e} (desde {f[:10]}).")
+        avisos.append(f"🚫 Lote {l} de {c} ({t}) está {e} (desde {_fmt(f)}).")
     conn.close()
     return avisos
 
@@ -155,10 +167,10 @@ def generar_avisos(dias_caducidad=30, dias_certificado=60):
         except Exception:
             continue
         if f < hoy:
-            avisos.append(f"❌ LOTE CADUCADO: {nom} lote {lote} caducó el {fcad}.")
+            avisos.append(f"❌ LOTE CADUCADO: {nom} lote {lote} caducó el {_fmt(fcad)}.")
         elif f <= limite:
             dias = (f - hoy).days
-            avisos.append(f"⏰ El lote {lote} de {nom} caduca en {dias} días ({fcad}).")
+            avisos.append(f"⏰ El lote {lote} de {nom} caduca en {dias} días ({_fmt(fcad)}).")
 
     # Certificados ecológicos
     rows = conn.execute("""

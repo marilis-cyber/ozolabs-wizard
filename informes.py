@@ -16,6 +16,38 @@ import os
 
 
 # =========================================================
+# FORMATO DE FECHA (DD/MM/AAAA)
+# =========================================================
+def _fmt_fecha(valor):
+    """ISO/date → DD/MM/AAAA. Devuelve '—' si está vacío."""
+    if not valor:
+        return "—"
+    s = str(valor).strip()
+    if not s:
+        return "—"
+    if "/" in s[:6] and len(s.split("/")[0]) <= 2:
+        return s.split(" ")[0]
+    d = s[:10]
+    try:
+        return datetime.strptime(d, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except ValueError:
+        return s
+
+
+def _fmt_fecha_hora(valor):
+    """ISO datetime → DD/MM/AAAA HH:MM. Devuelve '—' si está vacío."""
+    if not valor:
+        return "—"
+    s = str(valor).strip()
+    if not s:
+        return "—"
+    try:
+        return datetime.fromisoformat(s).strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return _fmt_fecha(s)
+
+
+# =========================================================
 # LOGO VECTORIAL (dibujado con primitivas de reportlab)
 # =========================================================
 def _dibujar_logo(c, x, y, tam=25 * mm):
@@ -206,8 +238,8 @@ def generar_informe_produccion(producto_lote, ruta_salida=None):
         ["Producto", nom],
         ["Formato/presentación", formato or "—"],
         ["Cantidad fabricada", f"{cantidad:.0f} uds"],
-        ["Fecha de fabricación", (f_fab or fecha[:10]) if fecha else "—"],
-        ["Fecha de caducidad", f_cad or "—"],
+        ["Fecha de fabricación", _fmt_fecha(f_fab or fecha)],
+        ["Fecha de caducidad", _fmt_fecha(f_cad)],
     ]
     t = Table(datos, colWidths=[60 * mm, 110 * mm])
     t.setStyle(TableStyle([
@@ -403,8 +435,8 @@ def _dibujar_etiqueta_termica(c, ancho, alto, nombre, formato, lote,
     # Fechas
     c.setFont("Helvetica", 6)
     c.setFillColor(colors.HexColor("#333333"))
-    c.drawString(margin, alto - 14.5 * mm, f"Fab: {f_fab or '—'}")
-    c.drawString(margin, alto - 17.5 * mm, f"Cad: {f_cad or '—'}")
+    c.drawString(margin, alto - 14.5 * mm, f"Fab: {_fmt_fecha(f_fab)}")
+    c.drawString(margin, alto - 17.5 * mm, f"Cad: {_fmt_fecha(f_cad)}")
 
     # Marca
     c.setFont("Helvetica-Bold", 5)
@@ -582,8 +614,8 @@ def generar_hoja_pesada(numero_pedido, ruta_salida=None):
     story.append(Paragraph(f"Hoja de pesada · Pedido {num}", estilo_h1))
     story.append(Paragraph(
         f"Estado: <b>{estado}</b> · "
-        f"Creado: {f_creac[:16].replace('T', ' ') if f_creac else '—'} · "
-        f"Previsto: {f_prev or '—'}",
+        f"Creado: {_fmt_fecha_hora(f_creac)} · "
+        f"Previsto: {_fmt_fecha(f_prev)}",
         estilo_small,
     ))
     story.append(Spacer(1, 4 * mm))
@@ -630,7 +662,7 @@ def generar_hoja_pesada(numero_pedido, ruta_salida=None):
             for a in mp["asignaciones"]:
                 tabla_mp.append([
                     mp["codigo"], mp["nombre"], a["lote"],
-                    (a["caducidad"] or "—")[:10],
+                    _fmt_fecha(a["caducidad"]),
                     f"{a['cantidad']:.3f} {a['unidad']}",
                     "________", "☐",
                 ])
@@ -753,7 +785,7 @@ def generar_hoja_pesada(numero_pedido, ruta_salida=None):
                     from firmas import obtener_firma
                     firma = obtener_firma(numero_pedido, tipo)
                     nombre = firma[0] if firma else ""
-                    fecha = firma[2][:16] if firma else ""
+                    fecha = _fmt_fecha_hora(firma[2]) if firma else ""
                     pie = Paragraph(
                         f"<font size=8>{nombre}<br/>{fecha}</font>",
                         estilo_small,
@@ -889,7 +921,7 @@ def generar_informe_rendimiento(producto_lote, ruta_salida=None):
     story.append(Paragraph("Resumen", h2))
     kpi = [
         ["Producto", prod_cod],
-        ["Fecha", fecha[:16].replace("T", " ") if fecha else "—"],
+        ["Fecha", _fmt_fecha_hora(fecha)],
         ["Cantidad teórica", f"{cant_teor:.2f} {unidad}"],
         ["Cantidad real", f"{cant_real:.2f} {unidad}"],
         ["Rendimiento", f"{rend_pct:.2f}%"],

@@ -25,6 +25,7 @@ ROLES = {
         "descripcion": "Fabricar, pedidos, materias primas y producto terminado.",
         "modulos": [
             "🏠 Dashboard", "🌿 Materias primas", "📦 Productos y fórmulas",
+            "📚 Biblioteca de fórmulas", "🧪 Hojas de fabricación",
             "⚙️ Producción", "📋 Pedidos de producción", "🧴 Envases y etiquetas",
             "🔬 Escandallos reales", "📐 Planificación MRP", "🏷️ Etiquetado",
             "🖨️ Etiqueta térmica", "📊 Avisos", "📈 Histórico y exportación",
@@ -37,6 +38,7 @@ ROLES = {
         "descripcion": "Control de calidad, no conformidades y liberación de lotes.",
         "modulos": [
             "🏠 Dashboard", "✅ Control de calidad", "🔬 Escandallos reales",
+            "📚 Biblioteca de fórmulas",
             "📄 Informes PDF", "📊 Avisos", "📊 Análisis y gráficos",
             "🏷️ Etiquetado", "🖨️ Etiqueta térmica", "📥 Recepción de mercancía",
             "📈 Rendimiento", "🔄 Reprocesos", "⚖️ Pesos reales", "📉 Mermas",
@@ -46,6 +48,7 @@ ROLES = {
         "descripcion": "Proveedores, materias primas, envases y planificación MRP.",
         "modulos": [
             "🏠 Dashboard", "🚚 Proveedores", "🌿 Materias primas",
+            "📚 Biblioteca de fórmulas",
             "🧴 Envases y etiquetas", "📐 Planificación MRP", "📊 Avisos",
             "💰 Costes", "📈 Histórico y exportación",
             "🛒 Órdenes de compra", "📥 Recepción de mercancía",
@@ -55,6 +58,7 @@ ROLES = {
         "descripcion": "Solo lectura. Dashboard, stock, avisos e históricos.",
         "modulos": [
             "🏠 Dashboard", "🌿 Materias primas", "📦 Productos y fórmulas",
+            "📚 Biblioteca de fórmulas",
             "📊 Avisos", "📈 Histórico y exportación", "📊 Análisis y gráficos",
         ],
     },
@@ -212,6 +216,20 @@ def cambiar_password(usuario, nueva):
     conn.close()
 
 
+def eliminar_usuario(usuario):
+    """Elimina un usuario. Devuelve True si se eliminó, False si no existía."""
+    conn = conectar()
+    try:
+        cur = conn.execute("DELETE FROM usuarios WHERE usuario = ?", (usuario,))
+        conn.commit()
+        return getattr(cur, "rowcount", 0) > 0
+    except Exception as e:
+        print(f"✘ Error eliminando usuario: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 # =========================================================
 # AUTENTICACIÓN
 # =========================================================
@@ -310,7 +328,7 @@ __all__ = [
     "hash_password", "verificar_password",
     "crear_tabla_usuarios", "crear_admin_inicial",
     "crear_usuario", "listar_usuarios", "cambiar_rol",
-    "activar_desactivar", "cambiar_password",
+    "activar_desactivar", "cambiar_password", "eliminar_usuario",
     "autenticar", "generar_token", "verificar_token",
     "puede_acceder",
     "registrar_auditoria", "ver_auditoria",
