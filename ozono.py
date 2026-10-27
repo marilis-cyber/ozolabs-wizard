@@ -13,24 +13,26 @@ from datetime import datetime
 # PRODUCCIONES DE OZONIZACIÓN
 # =========================================================
 def crear_produccion_ozono(litros, reactor, aceite_codigo="",
-                           aceite_nombre="", aceite_lote="", proveedor="",
-                           flujo=0, presion=0, nitrogeno="", trampa_agua="",
-                           emulsion="", hora_inicio="", hora_fin="",
+                           aceite_nombre="", aceite_lote="", lote_final="",
+                           proveedor="", flujo=0, presion=0, nitrogeno="",
+                           trampa_agua="", emulsion="", hora_inicio="", hora_fin="",
                            observaciones="", responsable=""):
-    """Registra una producción de aceite ozonizado."""
+    """Registra una producción de aceite ozonizado.
+    aceite_lote = lote de la materia prima de partida.
+    lote_final = lote asignado al aceite ozonizado resultante."""
     numero = f"OZO-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     conn = conectar()
     conn.execute("""
         INSERT INTO ozono_producciones
         (numero, fecha, hora_inicio, hora_fin, litros, reactor,
-         aceite_codigo, aceite_nombre, aceite_lote, proveedor,
+         aceite_codigo, aceite_nombre, aceite_lote, lote_final, proveedor,
          flujo, presion, nitrogeno, trampa_agua, emulsion,
          observaciones, responsable)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (numero, datetime.now().date().isoformat(), hora_inicio, hora_fin,
           litros, reactor, aceite_codigo, aceite_nombre, aceite_lote,
-          proveedor, flujo, presion, nitrogeno, trampa_agua, emulsion,
-          observaciones, responsable))
+          lote_final, proveedor, flujo, presion, nitrogeno, trampa_agua,
+          emulsion, observaciones, responsable))
     conn.commit()
     conn.close()
     print(f"✔ Producción de ozono {numero} registrada ({litros} L).")
@@ -41,7 +43,8 @@ def listar_producciones_ozono(limite=200):
     conn = conectar()
     rows = conn.execute("""
         SELECT numero, fecha, hora_inicio, hora_fin, litros, reactor,
-               aceite_nombre, aceite_lote, proveedor, flujo, presion,
+               aceite_codigo, aceite_nombre, aceite_lote, lote_final,
+               proveedor, flujo, presion,
                nitrogeno, trampa_agua, emulsion, observaciones, responsable
         FROM ozono_producciones
         ORDER BY id DESC LIMIT ?

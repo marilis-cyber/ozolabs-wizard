@@ -763,6 +763,7 @@ def _tablas_sql():
             aceite_codigo TEXT,
             aceite_nombre TEXT,
             aceite_lote TEXT,
+            lote_final TEXT,
             proveedor TEXT,
             flujo REAL DEFAULT 0,
             presion REAL DEFAULT 0,
@@ -875,6 +876,7 @@ def _migrar_columnas(conn):
         ("formulas_biblioteca_ingredientes", "codigo", "TEXT"),
         ("formulas_biblioteca_ingredientes", "ecologico", "INTEGER DEFAULT 0"),
         ("catalogo_mp", "inci", "TEXT"),
+        ("ozono_producciones", "lote_final", "TEXT"),
     ]
     for tabla, columna, tipo in migraciones:
         try:

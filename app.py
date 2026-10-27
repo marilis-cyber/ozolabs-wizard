@@ -1216,6 +1216,47 @@ elif seccion == "🧪 Hojas de fabricación":
                         columns=["Ingrediente", "Código", "Eco", "%", "Cantidad teórica", "Unidad", "Función"])
                     st.dataframe(df_calc, use_container_width=True)
 
+                    st.markdown("### 🔗 Asignar materia prima y lote a cada ingrediente")
+                    conn = conectar()
+                    mps = conn.execute("""
+                        SELECT codigo, nombre FROM catalogo_mp
+                        UNION
+                        SELECT DISTINCT codigo, nombre FROM materias_primas
+                        ORDER BY nombre
+                    """).fetchall()
+                    conn.close()
+                    opciones_mp = [f"{c} · {n}" for c, n in mps]
+
+                    asignaciones = []
+                    for i, c in enumerate(calc):
+                        idx_sel = 0
+                        if c["codigo"]:
+                            for j, o in enumerate(opciones_mp):
+                                if o.startswith(c["codigo"] + " · "):
+                                    idx_sel = j
+                                    break
+                        mp_sel = st.selectbox(
+                            f"{i+1}. {c['ingrediente']} (teórico {c['cantidad_teorica']:.3f} {c['unidad'] or '—'})",
+                            ["(sin asignar)"] + opciones_mp,
+                            index=idx_sel, key=f"hoja_mp_{fid}_{i}")
+                        lote_opts = []
+                        if mp_sel != "(sin asignar)":
+                            mp_cod_sel = mp_sel.split(" · ")[0]
+                            conn = conectar()
+                            lotes = conn.execute(
+                                "SELECT lote, cantidad, unidad FROM materias_primas "
+                                "WHERE codigo = ? AND cantidad > 0 ORDER BY lote",
+                                (mp_cod_sel,)).fetchall()
+                            conn.close()
+                            lote_opts = [f"{l[0]} ({l[1]:.2f} {l[2]})" for l in lotes]
+                        lote_sel = st.selectbox(
+                            "Lote", ["(sin lote)"] + lote_opts,
+                            key=f"hoja_lote_{fid}_{i}")
+                        asignaciones.append({
+                            "materia_codigo": mp_sel.split(" · ")[0] if mp_sel != "(sin asignar)" else "",
+                            "materia_lote": lote_sel.split(" (")[0] if lote_sel != "(sin lote)" else "",
+                        })
+
                     if st.button("📝 Generar hoja de fabricación", type="primary"):
                         prod_cod = ""
                         prod_nom = ""
@@ -1224,7 +1265,8 @@ elif seccion == "🧪 Hojas de fabricación":
                             prod_nom = sel_prod.split(" · ")[1]
                         num, err = crear_hoja_fabricacion(
                             fid, prod_cod, prod_nom, lote_pt, cantidad_objetivo,
-                            unidad_objetivo, str(fecha), observaciones, user["usuario"])
+                            unidad_objetivo, str(fecha), observaciones, user["usuario"],
+                            asignaciones)
                         if num:
                             st.success(f"✔ Hoja {num} creada (borrador).")
                             st.rerun()
@@ -2609,11 +2651,30 @@ elif seccion == "🫒 Aceites ozonizados":
             trampa_agua = c9.selectbox("Trampa de agua", ["sí", "no"])
             emulsion = c10.selectbox("Emulsión", ["sí", "no"])
 
-            st.markdown("#### Aceite base")
-            c11, c12, c13 = st.columns(3)
-            aceite_nombre = c11.text_input("Aceite")
-            aceite_lote = c12.text_input("Lote del aceite")
-            proveedor = c13.text_input("Proveedor")
+            st.markdown("#### Aceite base y lotes")
+            conn = conectar()
+            lotes_mp = conn.execute("""
+                SELECT codigo, nombre, lote, cantidad, unidad, proveedor
+                FROM materias_primas
+                WHERE cantidad > 0
+                ORDER BY nombre, lote
+            """).fetchall()
+            conn.close()
+
+            if not lotes_mp:
+                st.warning("No hay lotes de materia prima con stock. Registra primero el aceite base en 'Materias primas'.")
+                aceite_cod = aceite_nombre = aceite_lote = ""
+                prov_auto = ""
+            else:
+                opciones_lote = [f"{r[0]} · {r[1]} · {r[2]} ({r[3]} {r[4]})" for r in lotes_mp]
+                sel_lote = st.selectbox("Lote de la materia prima (aceite de partida) *", opciones_lote)
+                r = lotes_mp[opciones_lote.index(sel_lote)]
+                aceite_cod, aceite_nombre, aceite_lote = r[0], r[1], r[2]
+                prov_auto = r[5] or ""
+
+            c11, c12 = st.columns(2)
+            lote_final = c11.text_input("Lote del aceite final *")
+            proveedor = c12.text_input("Proveedor", value=prov_auto)
             responsable = st.text_input("Responsable")
             obs = st.text_area("Observaciones")
             crear_garrafa_ahora = st.checkbox(
@@ -2625,15 +2686,19 @@ elif seccion == "🫒 Aceites ozonizados":
             if st.form_submit_button("💾 Registrar producción"):
                 if litros <= 0:
                     st.error("Indica los litros producidos.")
+                elif not aceite_lote:
+                    st.error("Selecciona el lote de la materia prima.")
+                elif not lote_final:
+                    st.error("Indica el lote del aceite final.")
                 else:
                     num = crear_produccion_ozono(
-                        litros, reactor, "", aceite_nombre, aceite_lote,
-                        proveedor, flujo, presion, nitrogeno, trampa_agua,
-                        emulsion, hora_inicio, hora_fin, obs, responsable,
+                        litros, reactor, aceite_cod, aceite_nombre, aceite_lote,
+                        lote_final, proveedor, flujo, presion, nitrogeno,
+                        trampa_agua, emulsion, hora_inicio, hora_fin, obs, responsable,
                     )
                     if crear_garrafa_ahora:
                         cod_g = crear_garrafa(litros_garrafa, num,
-                                              aceite_lote, "Aceite ozonizado")
+                                              lote_final, "Aceite ozonizado")
                         st.success(f"✔ Producción {num} + garrafa {cod_g}.")
                     else:
                         st.success(f"✔ Producción {num} registrada.")
@@ -2644,12 +2709,12 @@ elif seccion == "🫒 Aceites ozonizados":
         filas = listar_producciones_ozono()
         df_pr = pd.DataFrame(
             [[f[0], fmt_fecha(f[1]), f[2], f[3], f[4], f[5], f[6], f[7],
-              f[8], f[9], f[10], f[11], f[12], f[13], f[14], f[15]]
+              f[8], f[9], f[10], f[11], f[12], f[13], f[14], f[15], f[16], f[17]]
              for f in filas],
             columns=["Número", "Fecha", "Inicio", "Fin", "Litros", "Reactor",
-                     "Aceite", "Lote", "Proveedor", "Flujo", "Presión",
-                     "N₂", "Trampa agua", "Emulsión", "Observaciones",
-                     "Responsable"])
+                     "Cód. MP", "Aceite", "Lote MP", "Lote final", "Proveedor",
+                     "Flujo", "Presión", "N₂", "Trampa agua", "Emulsión",
+                     "Observaciones", "Responsable"])
         st.dataframe(df_pr, use_container_width=True)
         descargar_df(df_pr, "producciones_ozono.csv")
 

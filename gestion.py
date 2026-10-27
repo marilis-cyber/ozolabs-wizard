@@ -566,8 +566,10 @@ def calcular_cantidades_formula(formula_id, cantidad_objetivo):
 
 def crear_hoja_fabricacion(formula_id, producto_codigo, producto_nombre,
                            lote_pt, cantidad_objetivo, unidad_objetivo,
-                           fecha, observaciones="", usuario=""):
-    """Crea una hoja de fabricación en estado 'borrador' a partir de una fórmula."""
+                           fecha, observaciones="", usuario="", asignaciones=None):
+    """Crea una hoja de fabricación en estado 'borrador' a partir de una fórmula.
+    asignaciones = lista (alineada con los ingredientes) de dicts:
+        {materia_codigo, materia_lote}"""
     cab, ings = obtener_formula(formula_id)
     if not cab:
         return None, "Fórmula no encontrada"
@@ -583,14 +585,21 @@ def crear_hoja_fabricacion(formula_id, producto_codigo, producto_nombre,
         """, (numero, formula_id, cab[1], cab[2], cab[3], producto_codigo,
               producto_nombre, lote_pt, cantidad_objetivo, unidad_objetivo,
               fecha, observaciones))
-        for ing, codigo, eco, pct, cant, uni, funcion in ings:
+        for idx, (ing, codigo, eco, pct, cant, uni, funcion) in enumerate(ings):
             teorica = (cantidad_objetivo * pct / 100.0) if pct else cant
+            mp_cod = ""
+            mp_lote = ""
+            if asignaciones and idx < len(asignaciones):
+                mp_cod = (asignaciones[idx].get("materia_codigo") or "").strip()
+                mp_lote = (asignaciones[idx].get("materia_lote") or "").strip()
+            if not mp_cod:
+                mp_cod = codigo or ""
             conn.execute("""
                 INSERT INTO hojas_fabricacion_lineas
                 (hoja_numero, ingrediente, porcentaje, cantidad_teorica, unidad,
                  materia_codigo, materia_lote, cantidad_real, unidad_real)
-                VALUES (?, ?, ?, ?, ?, ?, '', NULL, '')
-            """, (numero, ing, pct, teorica, uni, codigo or ""))
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '')
+            """, (numero, ing, pct, teorica, uni, mp_cod, mp_lote))
         conn.commit()
         return numero, None
     except Exception as e:
